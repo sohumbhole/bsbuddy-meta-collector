@@ -29,6 +29,7 @@ ACTIVE_MAP_MIN_HR = 50         # a map "counts" once it has this many high-rank 
 CELL_PLAYED_MIN = 30           # a (map,brawler) cell is eligible once actually played this much
 CELL_COVERED_MIN = 15          # ...and "covered" once it has this many high-rank games
 HR_FOCUS_TARGET = 0.60         # reward when >=60% of ranked data is Legendary+
+ROTATION_FRACTION = 0.15       # a map is "in rotation" at >=15% of the busiest map's high-rank games
 
 
 def summarize(snapshot, names):
@@ -38,30 +39,38 @@ def summarize(snapshot, names):
 
     ranked_appearances = 0.0
     high_appearances = 0.0
-    eligible_cells = 0     # brawler actually played on a map that has real high-rank data
-    covered_cells = 0      # ...and has enough high-rank games there
-    active_maps = 0
-
-    for m in maps.values():
-        brawlers = m.get("brawlers", {})
-        map_hr = 0.0
-        for t in brawlers.values():
+    # First pass: high-rank games per map (to find which maps are IN ROTATION).
+    map_hr_games = {}
+    for mp, m in maps.items():
+        hr = 0.0
+        for t in m.get("brawlers", {}).values():
             ranked_appearances += t.get("rPicks", 0.0)
+            h = sum((t.get("rankBuckets", {}).get(b, [0, 0])[0]) for b in HIGH_BUCKETS)
+            high_appearances += h
+            hr += h
+        map_hr_games[mp] = hr / 6.0
+
+    # A map is "in rotation" if it has a meaningful share of the busiest map's
+    # recent high-rank games. Because we keep only ~a week of data (half-life),
+    # this IS the current rotation: maps that rotated out decay below the floor
+    # and stop counting. Quality is judged ONLY on these maps (Sohum: it can't
+    # be judged on the 96 maps not in rotation, which by design have no recent
+    # data). The floor scales with volume so it stays right as data grows.
+    top = max(map_hr_games.values(), default=0.0)
+    rotation_floor = max(ACTIVE_MAP_MIN_HR, ROTATION_FRACTION * top)
+    rotation_maps = [mp for mp, hr in map_hr_games.items() if hr >= rotation_floor]
+
+    eligible_cells = 0     # brawler actually played on a rotation map
+    covered_cells = 0      # ...and has enough high-rank games there
+    for mp in rotation_maps:
+        for t in maps[mp].get("brawlers", {}).values():
+            if t.get("picks", 0.0) < CELL_PLAYED_MIN:
+                continue
+            eligible_cells += 1
             hr = sum((t.get("rankBuckets", {}).get(b, [0, 0])[0]) for b in HIGH_BUCKETS)
-            high_appearances += hr
-            map_hr += hr
-        # Coverage is measured only on ACTIVE maps (real high-rank play), over
-        # cells that are actually PLAYED, so it isn't diluted by irrelevant
-        # maps or by the lower-rank data we deliberately keep for rank filters.
-        if map_hr / 6.0 >= ACTIVE_MAP_MIN_HR:
-            active_maps += 1
-            for t in brawlers.values():
-                if t.get("picks", 0.0) < CELL_PLAYED_MIN:
-                    continue
-                eligible_cells += 1
-                hr = sum((t.get("rankBuckets", {}).get(b, [0, 0])[0]) for b in HIGH_BUCKETS)
-                if hr >= CELL_COVERED_MIN:
-                    covered_cells += 1
+            if hr >= CELL_COVERED_MIN:
+                covered_cells += 1
+    active_maps = len(rotation_maps)
 
     # 6 brawler appearances per game -> divide to get game-equivalents.
     ranked_games = ranked_appearances / 6.0
