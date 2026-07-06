@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BS Buddy · Data Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b1326; --surface:#131b2e; --surface2:#171f33; --line:rgba(245,245,220,.14);
+    --gold:#FFC400; --cream:#d3c5ab; --text:#dae2fd; --muted:#9c8f78;
+    --win:#37d39b; --loss:#ff6b7a; --blue:#7aa2ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;
+       -webkit-font-smoothing:antialiased;padding:24px 16px 64px}
+  .wrap{max-width:1040px;margin:0 auto}
+  .mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+  h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:26px;letter-spacing:.5px;color:var(--gold)}
+  .sub{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);letter-spacing:1px;margin-top:6px}
+  .live{display:inline-block;width:8px;height:8px;background:var(--win);margin-right:6px;vertical-align:middle;
+        animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  header{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px;
+         border-bottom:2px solid var(--gold);padding-bottom:16px;margin-bottom:22px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px}
+  .tile{background:var(--surface);border:1px solid var(--line);padding:16px}
+  .tile .k{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:1px;color:var(--muted)}
+  .tile .v{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:26px;margin-top:8px}
+  .tile .v.gold{color:var(--gold)} .tile .v.win{color:var(--win)} .tile .v.blue{color:var(--blue)}
+  .tile .d{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);margin-top:6px}
+  .panel{background:var(--surface);border:1px solid var(--line);padding:18px;margin-bottom:22px}
+  .panel h2{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:1.4px;color:var(--cream);
+            margin-bottom:14px;font-weight:500}
+  .findings{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+  .finding{border-left:3px solid var(--gold);padding:8px 12px;background:var(--surface2)}
+  .finding .fl{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.6px;color:var(--muted)}
+  .finding .fv{font-family:'Space Grotesk',sans-serif;font-weight:500;font-size:15px;margin-top:4px}
+  .quality-bar{height:10px;background:var(--surface2);border:1px solid var(--line);margin-top:8px}
+  .quality-bar>div{height:100%;background:var(--gold)}
+  svg{width:100%;height:220px;display:block}
+  .legend{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);margin-top:6px}
+  .dot{display:inline-block;width:8px;height:8px;margin:0 4px 0 12px;vertical-align:middle}
+  footer{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);text-align:center;
+         margin-top:30px;line-height:1.7}
+  a{color:var(--blue)}
+  .err{color:var(--loss);font-family:'JetBrains Mono',monospace;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>BS BUDDY · DATA ENGINE</h1>
+      <div class="sub"><span class="live"></span>LIVE HIGH-RANK META COLLECTOR · UPDATES EVERY 30 MIN</div>
+    </div>
+    <div class="sub" id="updated">LOADING…</div>
+  </header>
+
+  <div class="grid" id="tiles"></div>
+
+  <div class="panel">
+    <h2>DATA QUALITY</h2>
+    <div class="mono" id="qtext" style="font-size:22px;font-weight:700;color:var(--gold)">—</div>
+    <div class="quality-bar"><div id="qbar" style="width:0%"></div></div>
+    <div class="legend" id="qnote"></div>
+  </div>
+
+  <div class="panel">
+    <h2>GAMES COLLECTED OVER TIME</h2>
+    <svg id="chart" viewBox="0 0 1000 220" preserveAspectRatio="none"></svg>
+    <div class="legend">
+      <span class="dot" style="background:var(--gold)"></span>TOTAL GAMES IN DATASET
+      <span class="dot" style="background:var(--win)"></span>LEGENDARY+ GAMES
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>FINDINGS</h2>
+    <div class="findings" id="findings"></div>
+  </div>
+
+  <footer>
+    <div>SOURCE: OFFICIAL BRAWL STARS API · AGGREGATE META ONLY · NO PERSONAL DATA</div>
+    <div>ONE-WEEK HALF-LIFE · <a href="https://github.com/sohumbhole/bsbuddy-meta-collector">github.com/sohumbhole/bsbuddy-meta-collector</a></div>
+  </footer>
+</div>
+
+<script>
+const fmt = n => (n ?? 0).toLocaleString();
+function tile(k, v, cls, d){
+  return `<div class="tile"><div class="k">${k}</div><div class="v ${cls||''}">${v}</div>${d?`<div class="d">${d}</div>`:''}</div>`;
+}
+
+function sumWindow(history, hours){
+  const cut = Date.now() - hours*3600*1000;
+  return history.filter(h => new Date(h.ts).getTime() >= cut)
+                .reduce((a,h)=>({g:a.g+(h.newGames||0), hr:a.hr+(h.newHighRank||0)}), {g:0,hr:0});
+}
+
+function drawChart(history){
+  const svg = document.getElementById('chart');
+  if(!history.length){ svg.innerHTML=''; return; }
+  const W=1000,H=220,pad=6;
+  const total = history.map(h=>h.totalGames||0);
+  const high  = history.map(h=>h.highRankGames||0);
+  const maxY = Math.max(1, ...total);
+  const n = history.length;
+  const x = i => n<=1 ? W/2 : pad + i*(W-2*pad)/(n-1);
+  const y = v => H-pad - (v/maxY)*(H-2*pad);
+  const path = arr => arr.map((v,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const area = arr => `${path(arr)} L${x(n-1).toFixed(1)},${H-pad} L${x(0).toFixed(1)},${H-pad} Z`;
+  svg.innerHTML = `
+    <path d="${area(total)}" fill="rgba(255,196,0,.10)"/>
+    <path d="${path(total)}" fill="none" stroke="#FFC400" stroke-width="2"/>
+    <path d="${path(high)}" fill="none" stroke="#37d39b" stroke-width="2"/>
+    ${n===1?`<circle cx="${x(0)}" cy="${y(total[0])}" r="3" fill="#FFC400"/><circle cx="${x(0)}" cy="${y(high[0])}" r="3" fill="#37d39b"/>`:''}
+  `;
+}
+
+async function load(){
+  try{
+    const r = await fetch('./data/stats.json?_=' + Date.now());
+    if(!r.ok) throw new Error('stats.json ' + r.status);
+    const s = await r.json();
+    const c = s.current || {};
+    const day = sumWindow(s.history||[], 24);
+    const week = sumWindow(s.history||[], 24*7);
+
+    document.getElementById('updated').textContent =
+      'UPDATED ' + new Date(s.updatedAt).toLocaleString().toUpperCase();
+
+    document.getElementById('tiles').innerHTML =
+      tile('TOTAL GAMES', fmt(c.totalGames), 'gold', 'in the live dataset') +
+      tile('LEGENDARY+ GAMES', fmt(c.highRankGames), 'win', 'the data that matters') +
+      tile('RANKED GAMES', fmt(c.rankedGames), '', 'across all ranks') +
+      tile('TODAY', '+' + fmt(day.g), 'blue', '+' + fmt(day.hr) + ' legendary+') +
+      tile('THIS WEEK', '+' + fmt(week.g), 'blue', '+' + fmt(week.hr) + ' legendary+') +
+      tile('ELITE POOL', fmt(c.elitePool), '', fmt(c.eliteClubs) + ' elite clubs') +
+      tile('MAPS TRACKED', fmt(c.maps), '', 'with live data') +
+      tile('LAST RUN', '+' + fmt(c.lastRunNewGames), '', fmt(c.lastRunApiCalls) + ' api calls');
+
+    const q = c.quality || 0;
+    document.getElementById('qtext').textContent = q + ' / 100';
+    document.getElementById('qbar').style.width = q + '%';
+    document.getElementById('qnote').textContent =
+      `${fmt(c.coveredCells)} of ${fmt(c.totalCells)} map×brawler cells have solid high-rank data. Climbs as the collector runs.`;
+
+    document.getElementById('findings').innerHTML =
+      (s.findings||[]).map(f=>`<div class="finding"><div class="fl">${f.label.toUpperCase()}</div><div class="fv">${f.value}</div></div>`).join('')
+      || '<div class="legend">Findings appear after the next collection run.</div>';
+
+    drawChart(s.history||[]);
+  }catch(e){
+    document.getElementById('updated').innerHTML = '<span class="err">could not load stats.json ('+e.message+')</span>';
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

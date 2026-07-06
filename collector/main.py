@@ -15,6 +15,7 @@ from . import config
 from .api import Api
 from .crawl import Crawler
 from . import model
+from . import stats as statsmod
 
 
 def _load(path, default):
@@ -72,6 +73,42 @@ def save_state(state):
     _save(config.STATE_FILE, state["meta"])
 
 
+STATS_FILE = f"{config.DATA_DIR}/stats.json"
+STATS_HISTORY_CAP = 3000
+
+
+def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls):
+    names = {str(b["id"]): b["name"] for b in
+             ((crawler.api.brawlers() or {}).get("items", []))}
+    totals, findings = statsmod.summarize(state["snapshot"], names)
+    stats = _load(STATS_FILE, {"history": []})
+    stats["updatedAt"] = now.isoformat().replace("+00:00", "Z")
+    stats["current"] = {
+        **totals,
+        "elitePool": len(state["elite"]["tags"]),
+        "eliteClubs": len(state["elite"]["clubs"]),
+        "lastRunNewGames": new_games,
+        "lastRunNewHighRank": new_high,
+        "lastRunApiCalls": api_calls,
+    }
+    stats["findings"] = findings
+    stats["history"].append({
+        "ts": stats["updatedAt"],
+        "totalGames": totals["totalGames"],
+        "rankedGames": totals["rankedGames"],
+        "highRankGames": totals["highRankGames"],
+        "quality": totals["quality"],
+        "newGames": new_games,
+        "newRanked": new_ranked,
+        "newHighRank": new_high,
+        "apiCalls": api_calls,
+        "elitePool": len(state["elite"]["tags"]),
+        "eliteClubs": len(state["elite"]["clubs"]),
+    })
+    stats["history"] = stats["history"][-STATS_HISTORY_CAP:]
+    _save(STATS_FILE, stats)
+
+
 def main():
     if not config.API_KEY:
         print("ERROR: BS_PROXY_KEY not set in the environment.", file=sys.stderr)
@@ -99,7 +136,12 @@ def main():
     model.aggregate_into(state["snapshot"], crawler.games)
     model.finalize(state["snapshot"], now)
 
-    # 4) persist
+    # 4) dashboard stats (small stats.json the website reads, not the 38MB blob)
+    ranked = sum(1 for g in crawler.games if g["is_ranked"])
+    high_rank = sum(1 for g in crawler.games if g["rank_stage"] >= config.HIGH_STAGE_FLOOR)
+    write_stats(state, crawler, now, len(crawler.games), ranked, high_rank, api.calls)
+
+    # 5) persist
     state["meta"]["lastRunAt"] = now.isoformat()
     state["meta"]["totalCalls"] = state["meta"].get("totalCalls", 0) + api.calls
     save_state(state)
