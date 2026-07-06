@@ -1,0 +1,117 @@
+"""Entrypoint: load committed state, decay by elapsed time + patches, crawl for
+the time budget, aggregate, and write the fresh interchange snapshot + state.
+
+Run:  python -m collector.main
+State (data/*.json) is committed back to the repo by the GitHub Action so runs
+accumulate. BS_PROXY_KEY must be set in the environment (an Actions Secret).
+"""
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+
+from . import config
+from .api import Api
+from .crawl import Crawler
+from . import model
+
+
+def _load(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _save(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+def load_state():
+    elite_raw = _load(config.ELITE_FILE, {})
+    elite = {
+        "tags": set(elite_raw.get("tags", [])),
+        "cursor": elite_raw.get("cursor", 0),
+        "clubs": set(elite_raw.get("clubs", [])),
+        "clubExpandedAt": elite_raw.get("clubExpandedAt", {}),
+    }
+    return {
+        "snapshot": _load(config.SNAPSHOT_FILE, {"maps": {}}),
+        "producers": _load(config.PRODUCERS_FILE, {}),
+        "elite": elite,
+        "seen": set(_load(config.SEEN_FILE, [])),
+        "meta": _load(config.STATE_FILE, {}),
+    }
+
+
+def save_state(state):
+    _save(config.SNAPSHOT_FILE, state["snapshot"])
+    # bound the growing sets/maps before persisting
+    seen = list(state["seen"])[-config.SEEN_CAP:]
+    _save(config.SEEN_FILE, seen)
+    producers = state["producers"]
+    if len(producers) > config.PRODUCER_CAP:
+        ranked = sorted(producers.items(),
+                        key=lambda kv: (kv[1].get("timesFetched", 0),
+                                        kv[1].get("totalGamesSeen", 0)), reverse=True)
+        producers = dict(ranked[:config.PRODUCER_CAP])
+    _save(config.PRODUCERS_FILE, producers)
+    tags = list(state["elite"]["tags"])[-config.ELITE_CAP:]
+    _save(config.ELITE_FILE, {
+        "tags": tags,
+        "cursor": state["elite"]["cursor"],
+        "clubs": list(state["elite"]["clubs"]),
+        "clubExpandedAt": state["elite"]["clubExpandedAt"],
+    })
+    _save(config.STATE_FILE, state["meta"])
+
+
+def main():
+    if not config.API_KEY:
+        print("ERROR: BS_PROXY_KEY not set in the environment.", file=sys.stderr)
+        return 1
+
+    now = datetime.now(timezone.utc)
+    state = load_state()
+    last_run = state["meta"].get("lastRunAt")
+
+    # 1) age the existing snapshot (1-week half-life) + patch boundaries
+    model.apply_time_decay(state["snapshot"], last_run, now)
+    model.apply_patch_decay(state["snapshot"], last_run, now)
+
+    # 2) crawl
+    api = Api()
+    crawler = Crawler(api, state)
+    if len(state["elite"]["tags"]) < 3000:
+        print("Harvesting elite pool (cold start)...")
+        crawler.harvest_elite()
+    deadline = time.monotonic() + config.TIME_BUDGET_SECONDS
+    print(f"Crawling for up to {config.TIME_BUDGET_SECONDS}s...")
+    crawler.run(deadline)
+
+    # 3) aggregate new games into the snapshot
+    model.aggregate_into(state["snapshot"], crawler.games)
+    model.finalize(state["snapshot"], now)
+
+    # 4) persist
+    state["meta"]["lastRunAt"] = now.isoformat()
+    state["meta"]["totalCalls"] = state["meta"].get("totalCalls", 0) + api.calls
+    save_state(state)
+
+    high_rank = sum(1 for g in crawler.games if g["rank_stage"] >= config.HIGH_STAGE_FLOOR)
+    ranked = sum(1 for g in crawler.games if g["is_ranked"])
+    print(f"Done. api_calls={api.calls} new_games={len(crawler.games)} "
+          f"ranked={ranked} high_rank(legend+)={high_rank} "
+          f"elite_pool={len(state['elite']['tags'])} elite_clubs={len(state['elite']['clubs'])} "
+          f"snapshot_games={state['snapshot'].get('gamesAnalyzed')}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
