@@ -136,6 +136,12 @@ def main():
     model.aggregate_into(state["snapshot"], crawler.games)
     model.finalize(state["snapshot"], now)
 
+    # 3b) enforce the size budget every run so the file never creeps back over
+    # GitHub's 100MB push limit (root cause of the 2026-07-07 outage).
+    pruned_size = model.enforce_size_budget(state["snapshot"])
+    print(f"snapshot.json budget check: {pruned_size / 1_000_000:.1f}MB "
+          f"(cap {config.SNAPSHOT_MAX_BYTES / 1_000_000:.0f}MB)")
+
     # 4) dashboard stats (small stats.json the website reads, not the 38MB blob)
     ranked = sum(1 for g in crawler.games if g["is_ranked"])
     high_rank = sum(1 for g in crawler.games if g["rank_stage"] >= config.HIGH_STAGE_FLOOR)

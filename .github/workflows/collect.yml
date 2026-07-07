@@ -64,12 +64,26 @@ jobs:
               echo "no data changes this pass"
             else
               git commit -m "collect: refresh meta snapshot [skip ci]"
+              pushed=0
               for attempt in 1 2 3 4 5; do
-                if git push; then break; fi
+                if git push; then pushed=1; break; fi
                 echo "push rejected; syncing then retrying (attempt $attempt)"
                 git pull --rebase --strategy-option=theirs --autostash origin main || git rebase --abort || true
                 sleep 4
               done
+              if [ "$pushed" -ne 1 ]; then
+                # A push that can never land (e.g. a data file over GitHub's
+                # 100MB limit) must NOT stay committed locally: the next pass
+                # would stack another commit on top and compound the same
+                # unpushable growth for the rest of the job (this is exactly
+                # what stalled collection for hours on 2026-07-07). Drop this
+                # pass's commit and resume clean from origin/main; the size
+                # budget in collector.model prevents the file from growing
+                # past the limit in the first place, so this is a safety net.
+                echo "::warning::push failed after 5 attempts; resetting to origin/main so this pass's data doesn't block future passes"
+                git fetch origin main
+                git reset --hard origin/main
+              fi
             fi
             echo "::endgroup::"
             elapsed=$(( $(date +%s) - start ))

@@ -73,3 +73,11 @@ STATE_FILE = f"{DATA_DIR}/state.json"             # lastRunAt etc.
 SEEN_CAP = 400_000                                # bound the dedupe set
 PRODUCER_CAP = 60_000                             # bound the roster
 ELITE_CAP = 60_000                                # bound the elite pool
+
+# GitHub hard-rejects any committed file over 100MB. snapshot.json's
+# versus/synergy pair tallies have no natural cap (they scale with the number
+# of distinct brawler pairs actually seen), so without an enforced budget the
+# file eventually grows past the limit and EVERY push fails forever (this
+# happened 2026-07-07). Keep a comfortable margin below the hard limit so
+# ongoing growth between prune passes never tips it over.
+SNAPSHOT_MAX_BYTES = 80_000_000

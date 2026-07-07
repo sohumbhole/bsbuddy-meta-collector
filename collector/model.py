@@ -5,6 +5,7 @@ tallies (tournament x3 / ranked x2 / ladder x1) plus raw ranked counts split by
 rank bucket, and versus/synergy pair tallies. Written as a clean, Python-native
 JSON (string keys, floats) that the app adapts into its MetaSnapshot.
 """
+import json
 from datetime import datetime, timezone
 from . import config
 
@@ -202,6 +203,44 @@ def apply_patch_decay(snapshot: dict, last_run_iso: str | None, now: datetime):
             affected_set = set(affected) if affected else None
             for m in snapshot.get("maps", {}).values():
                 _scale_map(m, config.PATCH_HARD_DECAY, affected_set)
+
+
+def _snapshot_size(snapshot: dict) -> int:
+    return len(json.dumps(snapshot, separators=(",", ":")))
+
+
+def enforce_size_budget(snapshot: dict, max_bytes: int = config.SNAPSHOT_MAX_BYTES) -> int:
+    """Keep the interchange file safely under GitHub's 100MB hard push limit.
+
+    versus/synergy pair tallies have no natural cap: distinct brawler-pair
+    keys keep appearing as more games are seen, so left alone the file grows
+    past the limit and every subsequent push fails forever (this happened
+    2026-07-07: the file sat at ~116MB and no commit could land for hours).
+    Ratchet a picks-floor up and drop the weakest (lowest-signal) pairs first,
+    re-measuring real serialized size after each pass, until under budget.
+    Returns the final size in bytes.
+    """
+    size = _snapshot_size(snapshot)
+    if size <= max_bytes:
+        return size
+    for floor in (1, 2, 4, 8, 16, 32, 64, 128, 256):
+        for m in snapshot.get("maps", {}).values():
+            for coll in ("versus", "synergy"):
+                d = m.get(coll, {})
+                for key in [k for k, t in d.items() if t["picks"] < floor]:
+                    del d[key]
+        size = _snapshot_size(snapshot)
+        if size <= max_bytes:
+            return size
+    # Last resort (should not happen given the ratchet above): drop whole
+    # maps with the least data, lowest-signal first, until under budget.
+    by_games = sorted(snapshot.get("maps", {}).items(), key=lambda kv: kv[1].get("games", 0.0))
+    for map_name, _ in by_games:
+        del snapshot["maps"][map_name]
+        size = _snapshot_size(snapshot)
+        if size <= max_bytes:
+            break
+    return size
 
 
 def finalize(snapshot: dict, now: datetime):
