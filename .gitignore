@@ -3,3 +3,8 @@ __pycache__/
 *.tmp
 .DS_Store
 .venv/
+
+# Published as a GitHub Release asset instead (no size ceiling, unlike a
+# committed git blob). Local copies stay for debugging only.
+data/snapshot.json
+data/snapshot.json.gz

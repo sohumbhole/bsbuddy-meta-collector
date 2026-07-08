@@ -62,9 +62,10 @@ PATCH_HARD_DECAY = 0.30              # multiply tallies by this at a patch bound
 # Optional: {"2026-06-15": [16000000, 16000001]} to only decay affected brawlers.
 PATCH_AFFECTED_BRAWLERS: dict[str, list[int]] = {}
 
-# --- State files (committed to the repo so runs accumulate) ---
+# --- State files (the small ones committed to the repo so runs accumulate) ---
 DATA_DIR = os.environ.get("BS_DATA_DIR", "data")
-SNAPSHOT_FILE = f"{DATA_DIR}/snapshot.json"       # public interchange output (app downloads this)
+SNAPSHOT_FILE = f"{DATA_DIR}/snapshot.json"       # full interchange (local/debug only, not committed)
+SNAPSHOT_GZ_FILE = f"{DATA_DIR}/snapshot.json.gz"  # published as a GitHub Release asset (app downloads this)
 PRODUCERS_FILE = f"{DATA_DIR}/producers.json"     # producer roster
 ELITE_FILE = f"{DATA_DIR}/elite_pool.json"        # elite pool + clubs + cursor
 SEEN_FILE = f"{DATA_DIR}/seen.json"               # bounded game dedupe keys
@@ -74,10 +75,13 @@ SEEN_CAP = 400_000                                # bound the dedupe set
 PRODUCER_CAP = 60_000                             # bound the roster
 ELITE_CAP = 60_000                                # bound the elite pool
 
-# GitHub hard-rejects any committed file over 100MB. snapshot.json's
-# versus/synergy pair tallies have no natural cap (they scale with the number
-# of distinct brawler pairs actually seen), so without an enforced budget the
-# file eventually grows past the limit and EVERY push fails forever (this
-# happened 2026-07-07). Keep a comfortable margin below the hard limit so
-# ongoing growth between prune passes never tips it over.
-SNAPSHOT_MAX_BYTES = 80_000_000
+# snapshot.json is now published as a GitHub Release asset (2GB cap), not a
+# git-committed blob (git/GitHub hard-rejects any committed file over ~100MiB,
+# which is what caused the 2026-07-07 outage: growth is uncapped by design so
+# Sohum can collect as many games as the API allows, no artificial ceiling).
+# This is a SAFETY NET only (a bug that spins forever appending garbage keys),
+# not a routine data-destroying prune: real versus/synergy keys are bounded by
+# brawler-pair combinatorics per map (~a few hundred MB at total saturation),
+# comfortably under this. enforce_size_budget() is a no-op unless something is
+# actually wrong.
+SNAPSHOT_MAX_BYTES = 900_000_000

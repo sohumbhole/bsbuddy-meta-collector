@@ -2,9 +2,15 @@
 the time budget, aggregate, and write the fresh interchange snapshot + state.
 
 Run:  python -m collector.main
-State (data/*.json) is committed back to the repo by the GitHub Action so runs
-accumulate. BS_PROXY_KEY must be set in the environment (an Actions Secret).
+The small state files (data/*.json besides snapshot.json) are committed back
+to the repo by the GitHub Action so runs accumulate. snapshot.json has no size
+ceiling by design, so it is published as a GitHub Release asset instead (git
+hard-rejects committed blobs over ~100MiB): the Action gzips+uploads
+data/snapshot.json.gz, which the app downloads and decompresses (see
+SharedSnapshot.swift's Gunzip). BS_PROXY_KEY must be set in the environment
+(an Actions Secret).
 """
+import gzip
 import json
 import os
 import sys
@@ -51,8 +57,20 @@ def load_state():
     }
 
 
+def _save_gzip(path, data):
+    """Plain gzip.compress: no FNAME/FCOMMENT/FEXTRA, deterministic 10-byte
+    header, so the app's minimal gunzip decoder has a simple format to walk."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = json.dumps(data, separators=(",", ":")).encode("utf-8")
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(gzip.compress(payload))
+    os.replace(tmp, path)
+
+
 def save_state(state):
     _save(config.SNAPSHOT_FILE, state["snapshot"])
+    _save_gzip(config.SNAPSHOT_GZ_FILE, state["snapshot"])
     # bound the growing sets/maps before persisting
     seen = list(state["seen"])[-config.SEEN_CAP:]
     _save(config.SEEN_FILE, seen)

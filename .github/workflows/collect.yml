@@ -8,6 +8,15 @@ name: collect-meta
 # every pass, so data lands ~every 9 min. The cron below is only a RESTART
 # HEARTBEAT (offset off the congested marks), and concurrency single-flight
 # keeps runs back to back -> effectively continuous, scheduler-proof.
+#
+# snapshot.json is published as a GitHub RELEASE ASSET (2GB cap), not a git
+# commit: git/GitHub hard-rejects any committed blob over ~104,857,600 bytes
+# (100MiB), and that file has no natural size ceiling by design (Sohum wants
+# to collect as many games as the API allows, uncapped). Committing it kept
+# tipping over the git limit and silently blocking ALL data for hours
+# (2026-07-07 outage). The small bounded state files (seen/producers/
+# elite_pool/state/stats, all capped well under any limit) still go to git as
+# before, since they benefit from being versioned alongside the code.
 on:
   schedule:
     - cron: "13,43 * * * *"   # heartbeat only; the job loops internally
@@ -26,7 +35,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write            # so the job can commit updated data/ back
+  contents: write            # so the job can commit data/ + publish releases
 
 jobs:
   collect:
@@ -42,28 +51,43 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Collect (self-looping, commits every pass)
+      - name: Collect (self-looping, commits + publishes every pass)
         env:
           BS_PROXY_KEY: ${{ secrets.BS_PROXY_KEY }}
           ITER_BUDGET: ${{ github.event.inputs.iteration_budget || '540' }}
           WALL_CLOCK: ${{ github.event.inputs.wall_clock || '3000' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           git config user.name "bsbuddy-collector"
           git config user.email "collector@users.noreply.github.com"
+          release_tag="live-snapshot"
+          gh release view "$release_tag" >/dev/null 2>&1 || \
+            gh release create "$release_tag" \
+              --title "Live meta snapshot (auto-updated)" \
+              --notes "Always-current data/snapshot.json from the collector. Not a versioned release: every pass overwrites this asset in place. The app downloads this URL directly."
           start=$(date +%s)
           pass=0
           while :; do
             pass=$((pass+1))
             echo "::group::collect pass $pass"
             BS_TIME_BUDGET="$ITER_BUDGET" python -m collector.main || echo "pass $pass crawl failed, continuing"
-            # Robust publish: retry with rebase so a rare overlapping run can't
-            # drop this cycle's data (the earlier hard failure was a push race).
-            git add data/
+
+            # snapshot.json.gz: publish as a release asset, no size ceiling.
+            # Pre-gzipped by the collector itself (see collector/main.py) since
+            # release assets don't get auto-compressed on the fly the way
+            # raw.githubusercontent.com did.
+            if [ -f data/snapshot.json.gz ]; then
+              gh release upload "$release_tag" data/snapshot.json.gz --clobber || \
+                echo "::warning::release asset upload failed this pass, will retry next pass"
+            fi
+
+            # Everything else (small, bounded): commit to git as before.
+            git add data/elite_pool.json data/producers.json data/seen.json data/state.json data/stats.json
             if git diff --cached --quiet; then
-              echo "no data changes this pass"
+              echo "no small-file changes this pass"
             else
-              git commit -m "collect: refresh meta snapshot [skip ci]"
+              git commit -m "collect: refresh meta state [skip ci]"
               pushed=0
               for attempt in 1 2 3 4 5; do
                 if git push; then pushed=1; break; fi
@@ -72,15 +96,13 @@ jobs:
                 sleep 4
               done
               if [ "$pushed" -ne 1 ]; then
-                # A push that can never land (e.g. a data file over GitHub's
-                # 100MB limit) must NOT stay committed locally: the next pass
-                # would stack another commit on top and compound the same
-                # unpushable growth for the rest of the job (this is exactly
-                # what stalled collection for hours on 2026-07-07). Drop this
-                # pass's commit and resume clean from origin/main; the size
-                # budget in collector.model prevents the file from growing
-                # past the limit in the first place, so this is a safety net.
-                echo "::warning::push failed after 5 attempts; resetting to origin/main so this pass's data doesn't block future passes"
+                # These files are small and capped by count (SEEN_CAP etc.), so
+                # this should not recur, but if a push still can't land, don't
+                # leave it committed locally: the next pass would stack another
+                # commit on top and compound whatever the problem is across the
+                # rest of this job's passes (this is exactly what turned one bad
+                # push into an hours-long stall on 2026-07-07).
+                echo "::warning::push failed after 5 attempts; resetting to origin/main so this pass doesn't block future passes"
                 git fetch origin main
                 git reset --hard origin/main
               fi
