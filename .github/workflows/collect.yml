@@ -1,13 +1,10 @@
 name: collect-meta
 
-# GitHub's scheduled `cron` is best-effort: it DELAYS and silently DROPS
-# triggers, worst of all at the congested :00/:30 marks. That is why a
-# "*/30" schedule was only refreshing the dashboard ~every 90 min and stalled
-# for hours at a time. So we no longer rely on cron for cadence. Instead ONE
-# job self-loops for ~50 min, collecting a short budget and committing after
-# every pass, so data lands ~every 9 min. The cron below is only a RESTART
-# HEARTBEAT (offset off the congested marks), and concurrency single-flight
-# keeps runs back to back -> effectively continuous, scheduler-proof.
+# CADENCE MODEL: one job self-loops for ~5.5h, collecting a short budget and
+# committing after every pass so data lands ~every 9 min, then its final step
+# RE-DISPATCHES the next run (see the "Re-dispatch" step + the `on:` block).
+# The chain, not GitHub's cron, is what keeps collection continuous and
+# scheduler-proof. concurrency single-flight keeps overlapping runs orderly.
 #
 # snapshot.json is published as a GitHub RELEASE ASSET (2GB cap), not a git
 # commit: git/GitHub hard-rejects any committed blob over ~104,857,600 bytes
@@ -18,21 +15,20 @@ name: collect-meta
 # elite_pool/state/stats, all capped well under any limit) still go to git as
 # before, since they benefit from being versioned alongside the code.
 on:
-  # INTERIM MITIGATION 2026-07-08: GitHub's scheduled cron is best-effort and
-  # regularly DROPS triggers (observed a 2.5h gap where the twice-hourly
-  # heartbeat never fired). The self-loop depends on the cron to RESTART after
-  # each run, so a dropped cron = collection stops for hours. Two mitigations:
-  # (1) each run now loops for ~5.5h (WALL_CLOCK below) instead of ~50min, so a
-  # restart is needed ~7x less often. (2) fire the heartbeat MORE often so a
-  # missed slot is likelier to be covered by the next. The real fix is a
-  # redundant EXTERNAL trigger (needs Sohum: a fine-grained PAT + a free pinger
-  # like cron-job.org calling workflow_dispatch) and/or moving off Actions -
-  # that decision is pending the Fable research (see FABLE_RESEARCH.md).
+  # RELIABILITY MODEL (2026-07-08, Fable Q1 - the real fix, replaces the interim
+  # 5.5h-only mitigation): GitHub's scheduled cron is best-effort and silently
+  # DROPS triggers under load (observed a 2.5h gap where the heartbeat never
+  # fired), so we STOP depending on it for cadence. The last step of every run
+  # RE-DISPATCHES the next run via workflow_dispatch using the built-in
+  # GITHUB_TOKEN (a documented exception to the anti-recursion rule). That makes
+  # the collector a self-perpetuating CHAIN that never waits on GitHub's
+  # scheduler. The cron below is now only a BACKUP that resurrects the chain in
+  # the rare case a run is hard-evicted before its re-dispatch step runs.
+  # Kill switch: set repo variable COLLECTOR_ENABLED=false (Settings > Variables)
+  # to stop the chain without editing code.
   schedule:
-    - cron: "*/30 * * * *"   # heartbeat: restart the loop if it isn't running
-                             # (frequent heartbeats + a 5.5h job would just
-                             #  queue+cancel many pending runs; 30min balances
-                             #  restart-coverage against Actions-history noise)
+    - cron: "*/30 * * * *"   # BACKUP only now (chain is primary); resurrects the
+                             # chain if a run dies before re-dispatching
   workflow_dispatch:
     inputs:
       iteration_budget:
@@ -51,6 +47,7 @@ concurrency:
 
 permissions:
   contents: write            # so the job can commit data/ + publish releases
+  actions: write             # so the job can re-dispatch itself (self-chaining)
 
 jobs:
   collect:
@@ -88,7 +85,10 @@ jobs:
         env:
           BS_PROXY_KEY: ${{ secrets.BS_PROXY_KEY }}
           ITER_BUDGET: ${{ github.event.inputs.iteration_budget || '540' }}
-          WALL_CLOCK: ${{ github.event.inputs.wall_clock || '3000' }}
+          # Was mistakenly '3000' (50min): scheduled/chained runs (no dispatch
+          # input) fell back to it, so the 5.5h loop only ever applied to manual
+          # dispatches. Fixed to the real 5.5h default.
+          WALL_CLOCK: ${{ github.event.inputs.wall_clock || '19800' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
@@ -143,7 +143,26 @@ jobs:
             echo "::endgroup::"
             elapsed=$(( $(date +%s) - start ))
             if [ "$elapsed" -ge "$WALL_CLOCK" ]; then
-              echo "wall clock ${elapsed}s >= ${WALL_CLOCK}s; ending this run (heartbeat will restart)"
+              echo "wall clock ${elapsed}s >= ${WALL_CLOCK}s; ending this run (successor was/will be dispatched)"
               break
             fi
           done
+
+      - name: Re-dispatch the next run (self-chaining)
+        # if: always() so it fires on success, crawl failure, AND cancellation.
+        # Gated on COLLECTOR_ENABLED so Sohum can stop the chain from repo
+        # Settings > Variables without editing code (unset/anything-but-'false'
+        # keeps it running). This is what makes collection scheduler-proof: the
+        # chain never waits on GitHub's unreliable cron. `sleep` is a runaway
+        # floor - if some fast-exit bug ever made runs end in seconds, this caps
+        # the chain to ~1/min instead of a fork bomb. Normal runs take ~5.5h so
+        # it is negligible. The */30 cron is the backup if this step itself is
+        # skipped (hard runner eviction).
+        if: always() && vars.COLLECTOR_ENABLED != 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 30
+          echo "self-chaining: dispatching successor run of collect.yml"
+          gh workflow run collect.yml --ref main \
+            || echo "::warning::self-dispatch failed; the */30 cron backup will restart the chain"

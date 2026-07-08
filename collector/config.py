@@ -10,15 +10,18 @@ PROXY_BASE = "https://bsproxy.royaleapi.dev/v1"
 # The key is read from the environment (a GitHub Actions Secret). NEVER commit it.
 API_KEY = os.environ.get("BS_PROXY_KEY", "")
 
-# Politeness / rate limiting. The RoyaleAPI proxy enforces a per-second limit
-# and 429s (and can ban a key that hammers it), so we cap concurrency + rate
-# and back off hard on 429. Bumped up 2026-07-08 (was 8/8, giving only ~4 req/s
-# effective): the proxy tolerates far more, and the 429 handler auto-slows the
-# limiter if we overshoot, so this is safe to push. Watch the per-run
-# rateLimited/errors counters (logged + on the dashboard) after any change; if
-# 429s climb, dial these back down via the BS_CONCURRENCY / BS_RPS env vars.
-MAX_CONCURRENCY = int(os.environ.get("BS_CONCURRENCY", "24"))
-TARGET_RPS = float(os.environ.get("BS_RPS", "25"))
+# Politeness / rate limiting. The rate that binds is Supercell's per-key limit
+# on OUR key (the RoyaleAPI proxy is a transparent passthrough). Fable research
+# Q2: community consensus is ~10 req/s per token, throttling (not banning) is
+# the failure mode, and the API reports the true ceiling in the x-ratelimit-limit
+# header (now logged as limitHeader). So we target 10 rps / concurrency 16 (the
+# safe-aggressive sweet spot) - roughly 2x our previously-measured ~4.8 rps once
+# the throughput bugs are fixed (limiter lock + connection pool). RAISE these
+# only after the logged x-ratelimit-limit shows real headroom; the 429 handler
+# auto-slows (bounded) and honors Retry-After if we overshoot. Override live via
+# the BS_CONCURRENCY / BS_RPS env vars without a code change.
+MAX_CONCURRENCY = int(os.environ.get("BS_CONCURRENCY", "16"))
+TARGET_RPS = float(os.environ.get("BS_RPS", "10"))
 REQUEST_TIMEOUT = 15
 
 # --- Run budget (one Actions job is bounded; runs accumulate via committed state) ---
