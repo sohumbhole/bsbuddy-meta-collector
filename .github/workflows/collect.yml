@@ -51,6 +51,24 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
+      - name: Restore snapshot.json from the Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # snapshot.json is NOT in this checkout (published to a Release
+          # asset instead, see the notes below), so a fresh runner has to
+          # pull the current one back down before collecting or every run
+          # would start from empty and silently discard all prior history
+          # (this happened once already: 2026-07-08, caught within the hour
+          # by checking the asset size after a verification run).
+          mkdir -p data
+          if gh release download live-snapshot -p snapshot.json.gz -O data/snapshot.json.gz --clobber 2>/dev/null; then
+            gunzip -c data/snapshot.json.gz > data/snapshot.json
+            echo "restored snapshot.json from the live-snapshot release asset"
+          else
+            echo "no existing release asset (first run); starting from empty"
+          fi
+
       - name: Collect (self-looping, commits + publishes every pass)
         env:
           BS_PROXY_KEY: ${{ secrets.BS_PROXY_KEY }}
