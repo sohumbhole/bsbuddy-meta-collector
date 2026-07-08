@@ -209,6 +209,31 @@ def _snapshot_size(snapshot: dict) -> int:
     return len(json.dumps(snapshot, separators=(",", ":")))
 
 
+_TALLY_KEYS = ("picks", "wins", "rPicks", "rWins", "tPicks", "tWins")
+
+
+def compact_snapshot(snapshot: dict, ndigits: int = 2):
+    """Shrink the interchange file WITHOUT losing meaningful precision (~38%):
+    the decay math produces absurd floats like 1418.5006179173342 and always-
+    zero tournament fields. Round tally values to `ndigits` and drop zero
+    tPicks/tWins (the app defaults missing keys to 0). Safe + app-compatible;
+    versus/synergy pairs are 99% of the size so this is where it matters."""
+    for m in snapshot.get("maps", {}).values():
+        for coll in ("brawlers", "versus", "synergy"):
+            for t in m.get(coll, {}).values():
+                for k in _TALLY_KEYS:
+                    if k in t:
+                        t[k] = round(t[k], ndigits)
+                if not t.get("tPicks"):
+                    t.pop("tPicks", None)
+                if not t.get("tWins"):
+                    t.pop("tWins", None)
+                rb = t.get("rankBuckets")
+                if rb:
+                    for b, pair in rb.items():
+                        rb[b] = [round(pair[0], ndigits), round(pair[1], ndigits)]
+
+
 def enforce_size_budget(snapshot: dict, max_bytes: int = config.SNAPSHOT_MAX_BYTES) -> int:
     """Keep the interchange file safely under GitHub's 100MB hard push limit.
 

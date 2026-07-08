@@ -260,8 +260,10 @@ def main():
     model.aggregate_into(state["snapshot"], crawler.games)
     model.finalize(state["snapshot"], now)
 
-    # 3b) enforce the size budget every run so the file never creeps back over
-    # GitHub's 100MB push limit (root cause of the 2026-07-07 outage).
+    # 3b) compact (round decayed floats + drop zero tourn fields, ~38% smaller,
+    # app-compatible) THEN enforce the size budget so both the file and the
+    # budget check see the smaller size.
+    model.compact_snapshot(state["snapshot"])
     pruned_size = model.enforce_size_budget(state["snapshot"])
     print(f"snapshot.json budget check: {pruned_size / 1_000_000:.1f}MB "
           f"(cap {config.SNAPSHOT_MAX_BYTES / 1_000_000:.0f}MB)")
