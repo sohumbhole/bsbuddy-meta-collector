@@ -195,6 +195,29 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls,
     _save(STATS_FILE, stats)
 
 
+# Ranked buckets that matter for the tier list (gold and up).
+TIER_RANK_BUCKETS = ["gold", "diamond", "mythic", "legendary", "masters", "pro"]
+
+
+def underrepresented_buckets(snapshot):
+    """Which tier-relevant rank buckets are THIN relative to the fullest one
+    (P1.4). A bucket under ~25% of the busiest bucket is flagged so the crawler
+    prioritizes building it up. Pro/high-rank naturally stays the priority (it
+    also jumps the crawl's priority queue); this just stops lower ranks from
+    being starved so their tier lists have a baseline."""
+    totals = {}
+    for m in snapshot.get("maps", {}).values():
+        for t in m.get("brawlers", {}).values():
+            for bucket, pair in (t.get("rankBuckets") or {}).items():
+                totals[bucket] = totals.get(bucket, 0) + (pair[0] if pair else 0)
+    if not totals:
+        return set()
+    busiest = max(totals.values())
+    if busiest <= 0:
+        return set()
+    return {b for b in TIER_RANK_BUCKETS if totals.get(b, 0) < 0.25 * busiest}
+
+
 def main():
     if not config.API_KEY:
         print("ERROR: BS_PROXY_KEY not set in the environment.", file=sys.stderr)
@@ -211,6 +234,9 @@ def main():
     # 2) crawl
     api = Api()
     crawler = Crawler(api, state)
+    crawler.wanted_buckets = underrepresented_buckets(state["snapshot"])
+    if crawler.wanted_buckets:
+        print(f"Thin ranks to replenish (P1.4): {sorted(crawler.wanted_buckets)}")
     if len(state["elite"]["tags"]) < 3000:
         print("Harvesting elite pool (cold start)...")
         crawler.harvest_elite()

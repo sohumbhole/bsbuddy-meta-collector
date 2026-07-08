@@ -135,7 +135,10 @@ async function load(){
     document.getElementById('tiles').innerHTML =
       tile('TOTAL GAMES', fmt(c.totalGames), 'gold', 'in the live dataset') +
       tile('LEGENDARY+ GAMES', fmt(c.highRankGames), 'win', 'the data that matters') +
-      tile('HIGH-RANK FOCUS', (c.highRankFocus ?? 0) + '%', 'gold', 'of ranked data is legendary+') +
+      tile('RANK BASELINE', (c.rankBaseline ?? 0) + '%',
+           (c.rankBaseline ?? 100) < 60 ? 'err' : 'win',
+           'of tier ranks (gold+) have usable data') +
+      tile('HIGH-RANK FOCUS', (c.highRankFocus ?? 0) + '%', '', 'of ranked data is legendary+ (info)') +
       tile('RANKED GAMES', fmt(c.rankedGames), '', 'across all ranks') +
       tile('TODAY', '+' + fmt(day.g), 'blue', '+' + fmt(day.hr) + ' legendary+') +
       tile('THIS WEEK', '+' + fmt(week.g), 'blue', '+' + fmt(week.hr) + ' legendary+') +
@@ -156,7 +159,7 @@ async function load(){
     document.getElementById('qtext').textContent = q + ' / 100';
     document.getElementById('qbar').style.width = q + '%';
     document.getElementById('qnote').textContent =
-      `On the ${fmt(c.activeMaps)} active maps, ${fmt(c.coveredCells)} of ${fmt(c.totalCells)} played cells have solid high-rank data. Volume climbs each run; quality rises with it.`;
+      `High-rank volume + map coverage drive most of the score (pro/legendary+ stays the priority); the rank baseline (${(c.rankBaseline ?? 0)}%) rewards having usable data in every tier rank so gold/diamond players get a real tier list too. Adding lower-rank data only raises this.`;
 
     document.getElementById('findings').innerHTML =
       (s.findings||[]).map(f=>`<div class="finding"><div class="fl">${f.label.toUpperCase()}</div><div class="fv">${f.value}</div></div>`).join('')

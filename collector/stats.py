@@ -28,8 +28,13 @@ HR_VOLUME_TARGET = 200_000     # high-rank games where the volume component tops
 ACTIVE_MAP_MIN_HR = 50         # a map "counts" once it has this many high-rank games
 CELL_PLAYED_MIN = 30           # a (map,brawler) cell is eligible once actually played this much
 CELL_COVERED_MIN = 15          # ...and "covered" once it has this many high-rank games
-HR_FOCUS_TARGET = 0.60         # reward when >=60% of ranked data is Legendary+
 ROTATION_FRACTION = 0.15       # a map is "in rotation" at >=15% of the busiest map's high-rank games
+# The tier list is offered per rank (gold and up). Quality now also rewards
+# having a BASELINE in every rank (P1.4), so adding lower-rank data IMPROVES the
+# score instead of dragging down the old "% high-rank focus" metric. A bucket
+# tops out its contribution at this many game-equivalents.
+TIER_BUCKETS = ("gold", "diamond", "mythic", "legendary", "masters", "pro")
+BUCKET_BASELINE = 8_000
 
 
 def summarize(snapshot, names):
@@ -77,20 +82,38 @@ def summarize(snapshot, names):
     high_rank_games = high_appearances / 6.0
     hr_focus = high_rank_games / ranked_games if ranked_games else 0.0
 
-    # Data quality (0-100), aligned to the goal: enough high-rank VOLUME +
-    # COVERAGE of the maps that matter + a high high-rank FOCUS (the data is
-    # mostly Legendary+, which is the whole point). Keeping lower-rank data for
-    # rank filters no longer hurts the score.
+    # Per-tier-bucket game-equivalents, for the RANK BASELINE metric.
+    bucket_games = {b: 0.0 for b in TIER_BUCKETS}
+    for m in maps.values():
+        for t in m.get("brawlers", {}).values():
+            rb = t.get("rankBuckets", {})
+            for b in TIER_BUCKETS:
+                bucket_games[b] += (rb.get(b, [0, 0])[0])
+    bucket_games = {b: v / 6.0 for b, v in bucket_games.items()}
+    # Soft baseline coverage: each bucket contributes up to 1 as it fills toward
+    # BUCKET_BASELINE; the mean across the 6 tier ranks is the rank-baseline
+    # score. Adding lower-rank data can only RAISE this (never lowers volume/
+    # coverage), so more complete data always scores >= before.
+    rank_baseline = sum(min(1.0, bucket_games[b] / BUCKET_BASELINE)
+                        for b in TIER_BUCKETS) / len(TIER_BUCKETS)
+
+    # Data quality (0-100): high-rank VOLUME + high-rank map COVERAGE stay the
+    # dominant drivers (0.70) so pro/high-level data remains the priority; the
+    # RANK BASELINE (0.30) rewards having usable data in every rank so a
+    # gold/diamond player also gets a real tier list. This REPLACES the old
+    # "% of data that is Legendary+" term, which perversely fell as we (rightly)
+    # added lower-rank baselines.
     volume = min(1.0, high_rank_games / HR_VOLUME_TARGET)
     coverage = (covered_cells / eligible_cells) if eligible_cells else 0.0
-    focus = min(1.0, hr_focus / HR_FOCUS_TARGET)
-    quality = round(100 * (0.45 * volume + 0.35 * coverage + 0.20 * focus))
+    quality = round(100 * (0.45 * volume + 0.25 * coverage + 0.30 * rank_baseline))
 
     totals = {
         "totalGames": round(total_games),
         "rankedGames": round(ranked_games),
         "highRankGames": round(high_rank_games),
-        "highRankFocus": round(100 * hr_focus),   # % of ranked data that is Legendary+
+        "highRankFocus": round(100 * hr_focus),   # % of ranked data that is Legendary+ (info only)
+        "rankBaseline": round(100 * rank_baseline),  # % of tier ranks with a usable baseline
+        "bucketGames": {b: round(v) for b, v in bucket_games.items()},
         "maps": len(maps),
         "activeMaps": active_maps,
         "coveredCells": covered_cells,
@@ -98,8 +121,10 @@ def summarize(snapshot, names):
         "quality": quality,
     }
 
-    findings = [{"label": "High-rank focus",
-                 "value": f"{round(100 * hr_focus)}% of ranked data is Legendary+"}]
+    thin = [b for b in TIER_BUCKETS if bucket_games[b] < BUCKET_BASELINE]
+    findings = [{"label": "Rank baseline",
+                 "value": (f"{round(100 * rank_baseline)}% of tier ranks covered"
+                           + (f"; thin: {', '.join(thin)}" if thin else "; all ranks covered"))}]
     findings += _findings(snapshot, names)
     return totals, findings
 

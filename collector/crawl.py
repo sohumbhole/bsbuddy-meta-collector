@@ -20,6 +20,12 @@ class Crawler:
         self.seen = state["seen"]                # set of game dedupe keys
         self.games = []                          # collected this run
         self.examined = 0                        # parsed games considered (fresh + dup)
+        # Rank buckets that are thin in the dataset (P1.4): when we ENCOUNTER a
+        # player in one of these ranks we dig in (prioritize their co-players)
+        # instead of moving on, and we seed known players of these ranks. Set by
+        # main() from the snapshot each run. High rank is ALWAYS priority; this
+        # is additive so under-served ranks (e.g. diamond) build a baseline too.
+        self.wanted_buckets = set()
         self._brawler_ids = None
 
     # --- helpers ---
@@ -40,7 +46,23 @@ class Crawler:
             last = datetime.fromisoformat(rec["lastFetchedAt"])
         except ValueError:
             return True
-        return (self._now() - last).total_seconds() > config.REFETCH_COOLDOWN_HOURS * 3600
+        hours_since = (self._now() - last).total_seconds() / 3600.0
+        # Dormant players (no fresh games in a while, or repeatedly-empty
+        # fetches) get a long cooldown so we stop wasting calls on them; active
+        # players are fair game every REFETCH_COOLDOWN_HOURS.
+        cooldown = config.REFETCH_COOLDOWN_HOURS
+        last_fresh = rec.get("lastFreshAt")
+        if last_fresh:
+            try:
+                fresh_ago = (self._now() - datetime.fromisoformat(last_fresh)).total_seconds() / 3600.0
+                if fresh_ago > config.DORMANT_AFTER_HOURS:
+                    cooldown = config.DORMANT_COOLDOWN_HOURS
+            except ValueError:
+                pass
+        elif rec.get("timesFetched", 0) >= 2:
+            # fetched twice, never yielded fresh games -> treat as dormant
+            cooldown = config.DORMANT_COOLDOWN_HOURS
+        return hours_since > cooldown
 
     # --- elite pool harvest (per-brawler leaderboards + top clubs) ---
     def harvest_elite(self, leaderboard_fetches=30, club_fetches=15):
@@ -90,8 +112,21 @@ class Crawler:
         due.sort(key=yield_score, reverse=True)
         return due[:limit]
 
+    def _wanted_bucket_producers(self, limit):
+        # Known players whose rank falls in a thin bucket (P1.4), off cooldown.
+        if not self.wanted_buckets:
+            return []
+        out = [t for t, r in self.producers.items()
+               if config.rank_bucket(r.get("bestRankStageSeen", 0)) in self.wanted_buckets
+               and self._cooldown_ok(t)]
+        random.shuffle(out)
+        return out[:limit]
+
     def build_seed_queue(self):
         seeds = []
+        # Thin-rank players first, so under-served ranks build a baseline even
+        # while high-rank stays the priority (it jumps the priority queue below).
+        seeds += self._wanted_bucket_producers(600)
         seeds += self._high_rank_producers(400)
         elite = [t for t in self.elite["tags"] if self._cooldown_ok(t)]
         random.shuffle(elite)
@@ -153,7 +188,10 @@ class Crawler:
                 note_players(g)
                 if g["is_ranked"]:
                     log_had_ranked = True
-                if g["rank_stage"] >= config.HIGH_STAGE_FLOOR:
+                # Dig deeper on high-rank AND on thin-rank games (P1.4): jump
+                # their co-players to the front so we build those ranks up.
+                if g["rank_stage"] >= config.HIGH_STAGE_FLOOR or \
+                   (g["is_ranked"] and g.get("rank_bucket") in self.wanted_buckets):
                     priority[:0] = [t for t in g["tags"] if t not in visited]
             # snowball ranked co-players
             if participant_tags(log):
@@ -162,6 +200,8 @@ class Crawler:
             rec["lastFetchedAt"] = self._now().isoformat()
             rec["timesFetched"] = rec.get("timesFetched", 0) + 1
             rec["freshGamesLastFetch"] = fresh
+            if fresh > 0:
+                rec["lastFreshAt"] = self._now().isoformat()  # dormancy signal
 
             # recursive elite-club expansion
             if log_had_ranked and club_expansions < club_budget:

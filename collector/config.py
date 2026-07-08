@@ -32,7 +32,16 @@ REQUEST_TIMEOUT = 15
 TIME_BUDGET_SECONDS = int(os.environ.get("BS_TIME_BUDGET", "1200"))  # 20 min default
 
 # --- Collection tuning (mirrors the Swift MetaService) ---
-REFETCH_COOLDOWN_HOURS = 20          # a log barely changes inside a day
+# Re-check a KNOWN player after only 4h (was 20h): once we've saturated the
+# reachable high-rank pool, re-polling active players for their NEW games is the
+# cheapest way to keep collecting (they play again within hours). Sohum: "if
+# it's been >4h and they're active, it's fair game, no harm." A player who has
+# gone DORMANT (no fresh games from them in ~2 days) is unlikely to play soon,
+# so they get a long cooldown to avoid wasting calls; they still get re-checked
+# if they resurface in a future match.
+REFETCH_COOLDOWN_HOURS = 4
+DORMANT_AFTER_HOURS = 48             # no fresh games in this long => dormant
+DORMANT_COOLDOWN_HOURS = 72          # dormant players: only re-check this often
 LADDER_MIN_AVG_TROPHIES = 650        # skip casual trophy noise
 HIGH_STAGE_FLOOR = 16                # Legendary+ = the rare high-rank gold
 ELITE_CLUB_FLOOR = 700_000           # club total trophies to count as elite
