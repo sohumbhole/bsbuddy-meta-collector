@@ -88,8 +88,11 @@ TOURNAMENT_FETCH_INTERVAL_HOURS = 24   # hit Liquipedia at most once a day
 TOURNAMENT_RETRY_INTERVAL_HOURS = 2    # if a fetch fails, retry no sooner than this
 
 SEEN_CAP = 400_000                                # bound the dedupe set
-PRODUCER_CAP = 60_000                             # bound the roster
-ELITE_CAP = 60_000                                # bound the elite pool
+# Bigger rotation pool = more distinct players fetchable within the 20h refetch
+# window before we start re-treading (the current throughput ceiling). These
+# files are small JSON committed to git; 150k tags is still only a few MB.
+PRODUCER_CAP = 150_000                             # bound the roster
+ELITE_CAP = 120_000                                # bound the elite pool
 
 # snapshot.json is now published as a GitHub Release asset (2GB cap), not a
 # git-committed blob (git/GitHub hard-rejects any committed file over ~100MiB,

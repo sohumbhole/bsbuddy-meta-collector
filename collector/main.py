@@ -214,6 +214,15 @@ def main():
     if len(state["elite"]["tags"]) < 3000:
         print("Harvesting elite pool (cold start)...")
         crawler.harvest_elite()
+    else:
+        # Keep discovering FRESH players every run (throughput bottleneck is
+        # player supply, not the API or the pool: once we saturate the reachable
+        # high-rank population within the 20h refetch window, refill() starves on
+        # cooldown'd tags). A modest harvest rotates the country x brawler cursor
+        # so new top players keep entering the pool. ~30 cheap calls/run.
+        harvested_before = len(crawler.elite["tags"])
+        crawler.harvest_elite(leaderboard_fetches=20, club_fetches=10)
+        print(f"Incremental harvest: elite pool {harvested_before} -> {len(crawler.elite['tags'])}")
     crawl_started = time.monotonic()
     deadline = crawl_started + config.TIME_BUDGET_SECONDS
     print(f"Crawling for up to {config.TIME_BUDGET_SECONDS}s "
