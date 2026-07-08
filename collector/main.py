@@ -127,6 +127,7 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls,
         # never gets near 0, we have room to raise BS_RPS next run.
         "lastRunLimitHeader": health["limitHeader"],
         "lastRunRemainingMin": health["remainingMin"],
+        "lastRunAvgLatencyMs": health["avgLatencyMs"],
         # Raw (uncompressed) snapshot size, same measure enforce_size_budget()
         # uses. The safety-net cap (SNAPSHOT_MAX_BYTES) is on THIS number, not
         # the gzipped upload size, since it's what the phone downloads-after-
@@ -218,6 +219,7 @@ def main():
           f"rate_limited={h['rateLimited']} errors={h['errors']} "
           f"server_errors={h['serverErrors']} forbidden={h['forbidden']} "
           f"x_ratelimit_limit={h['limitHeader']} remaining_min={h['remainingMin']} "
+          f"avg_latency_ms={h['avgLatencyMs']} concurrency={config.MAX_CONCURRENCY} "
           f"elite_pool={len(state['elite']['tags'])} elite_clubs={len(state['elite']['clubs'])} "
           f"snapshot_games={state['snapshot'].get('gamesAnalyzed')}")
     if h["forbidden"] > 0:

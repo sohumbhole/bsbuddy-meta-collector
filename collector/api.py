@@ -70,9 +70,12 @@ class Api:
         self.server_errors = 0    # 5xx from upstream
         self.limit_header = 0     # last seen x-ratelimit-limit (our real ceiling)
         self.remaining_min = None # lowest x-ratelimit-remaining seen (headroom)
+        self.latency_sum = 0.0    # sum of request round-trip seconds (200s only)
+        self.latency_n = 0        # count, for avg latency (the throughput lever)
         self._lock = threading.Lock()
 
     def health(self) -> dict:
+        avg_latency_ms = round(1000 * self.latency_sum / self.latency_n) if self.latency_n else 0
         return {
             "calls": self.calls,
             "rateLimited": self.rate_limited,
@@ -81,6 +84,7 @@ class Api:
             "serverErrors": self.server_errors,
             "limitHeader": self.limit_header,
             "remainingMin": self.remaining_min if self.remaining_min is not None else -1,
+            "avgLatencyMs": avg_latency_ms,
         }
 
     def _note_ratelimit_headers(self, r):
@@ -107,7 +111,9 @@ class Api:
             with self._lock:
                 self.calls += 1
             try:
+                t0 = time.monotonic()
                 r = self.session.get(url, timeout=config.REQUEST_TIMEOUT)
+                dt = time.monotonic() - t0
             except requests.RequestException:
                 if attempt == 3:
                     with self._lock:
@@ -116,6 +122,9 @@ class Api:
                 continue
             self._note_ratelimit_headers(r)
             if r.status_code == 200:
+                with self._lock:
+                    self.latency_sum += dt
+                    self.latency_n += 1
                 self.limiter.speed_up()
                 try:
                     return r.json()

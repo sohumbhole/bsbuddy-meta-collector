@@ -10,18 +10,22 @@ PROXY_BASE = "https://bsproxy.royaleapi.dev/v1"
 # The key is read from the environment (a GitHub Actions Secret). NEVER commit it.
 API_KEY = os.environ.get("BS_PROXY_KEY", "")
 
-# Politeness / rate limiting. The rate that binds is Supercell's per-key limit
-# on OUR key (the RoyaleAPI proxy is a transparent passthrough). Fable research
-# Q2: community consensus is ~10 req/s per token, throttling (not banning) is
-# the failure mode, and the API reports the true ceiling in the x-ratelimit-limit
-# header (now logged as limitHeader). So we target 10 rps / concurrency 16 (the
-# safe-aggressive sweet spot) - roughly 2x our previously-measured ~4.8 rps once
-# the throughput bugs are fixed (limiter lock + connection pool). RAISE these
-# only after the logged x-ratelimit-limit shows real headroom; the 429 handler
-# auto-slows (bounded) and honors Retry-After if we overshoot. Override live via
-# the BS_CONCURRENCY / BS_RPS env vars without a code change.
-MAX_CONCURRENCY = int(os.environ.get("BS_CONCURRENCY", "16"))
-TARGET_RPS = float(os.environ.get("BS_RPS", "10"))
+# Politeness / rate limiting. LIVE FINDING (2026-07-08, session 3): after the
+# limiter-lock + connection-pool fixes, throughput is bottlenecked by
+# CONCURRENCY x request LATENCY, NOT by the rate cap and NOT by throttling. At
+# concurrency 16 we saw ~4.7 rps with ZERO 429s and ZERO 403s across many
+# passes, implying ~3.4s/request through the proxy (16 / 4.7). The rate limiter
+# (was 10) never even binds. The x-ratelimit-limit header is NOT forwarded by
+# the proxy (came back absent), so we can't read the ceiling directly - instead
+# we PROBE it by scaling concurrency and watching the 429 counter, with the
+# bounded 429 auto-slowdown + Retry-After as the safety net.
+# So: raise CONCURRENCY (the actual throughput lever) to ~48 to reach ~14 rps
+# (48 / 3.4), and keep a comfortably-above rps cap so the limiter only engages
+# if latency drops. Zero throttling at 4.7 means real headroom; if the next
+# passes still show 0 x 429, push concurrency higher again. Override live via
+# BS_CONCURRENCY / BS_RPS env vars (repo variables) without a code change.
+MAX_CONCURRENCY = int(os.environ.get("BS_CONCURRENCY", "48"))
+TARGET_RPS = float(os.environ.get("BS_RPS", "15"))
 REQUEST_TIMEOUT = 15
 
 # --- Run budget (one Actions job is bounded; runs accumulate via committed state) ---
