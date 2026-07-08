@@ -4,7 +4,7 @@ MetaService strategy to run server-side under a time budget.
 """
 import time
 import random
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timezone
 
 from . import config
@@ -131,66 +131,88 @@ class Crawler:
                 if high:
                     rec["highRankGamesSeen"] = rec.get("highRankGamesSeen", 0) + 1
 
-        while (queue or priority) and time.monotonic() < deadline:
-            batch = []
-            while (priority or queue) and len(batch) < config.MAX_CONCURRENCY:
+        # Process ONE fetched battlelog. Runs on the main thread only (never in
+        # a worker), so all the shared-state mutation below (seen/games/
+        # producers/queue/priority/elite) stays single-threaded and lock-free,
+        # exactly as before. Returns nothing; mutates state + enqueues snowball
+        # tags. `nonlocal` for the club-expansion budget counter.
+        def process(tag, log):
+            nonlocal club_expansions
+            if log is None:
+                return
+            parsed = parse_battlelog(log, tag)
+            fresh = 0
+            log_had_ranked = False
+            for g in parsed:
+                self.examined += 1
+                if g["dedupe"] in self.seen:
+                    continue
+                self.seen.add(g["dedupe"])
+                self.games.append(g)
+                fresh += 1
+                note_players(g)
+                if g["is_ranked"]:
+                    log_had_ranked = True
+                if g["rank_stage"] >= config.HIGH_STAGE_FLOOR:
+                    priority[:0] = [t for t in g["tags"] if t not in visited]
+            # snowball ranked co-players
+            if participant_tags(log):
+                queue[:0] = [t for t in participant_tags(log) if t not in visited]
+            rec = self.producers.setdefault(tag, {})
+            rec["lastFetchedAt"] = self._now().isoformat()
+            rec["timesFetched"] = rec.get("timesFetched", 0) + 1
+            rec["freshGamesLastFetch"] = fresh
+
+            # recursive elite-club expansion
+            if log_had_ranked and club_expansions < club_budget:
+                club_tag = rec.get("clubTag")
+                if not rec.get("clubResolved"):
+                    prof = self.api.player(tag)
+                    club_tag = (prof or {}).get("club", {}).get("tag")
+                    rec["clubTag"] = club_tag
+                    rec["clubResolved"] = True
+                if club_tag and club_tag not in expanded_clubs and self._club_due(club_tag):
+                    expanded_clubs.add(club_tag)
+                    detail = self.api.club(club_tag)
+                    if detail:
+                        self.elite["clubExpandedAt"][club_tag] = self._now().isoformat()
+                        if club_tag in self.elite["clubs"] or detail.get("trophies", 0) >= config.ELITE_CLUB_FLOOR:
+                            self.elite["clubs"].add(club_tag)
+                            club_expansions += 1
+                            members = [m["tag"] for m in detail.get("members", [])
+                                       if m["tag"] not in visited]
+                            priority[:0] = members
+                            self.elite["tags"].update(members)
+
+        # Continuous worker pool: keep MAX_CONCURRENCY battlelog fetches in
+        # flight at all times instead of fetching a batch of N then blocking on
+        # the slowest of the N (the old executor.map pattern capped effective
+        # throughput at ~4 req/s even with 0 proxy throttling; the real ceiling
+        # is now the RateLimiter's TARGET_RPS). Snowball tags discovered while
+        # processing immediately top the pool back up.
+        inflight = {}   # future -> tag
+
+        def refill():
+            while len(inflight) < config.MAX_CONCURRENCY and (priority or queue):
                 tag = priority.pop(0) if priority else queue.pop(0)
                 if tag in visited:
                     continue
                 visited.add(tag)
                 if not self._cooldown_ok(tag):
                     continue
-                batch.append(tag)
-            if not batch:
-                continue
+                inflight[executor.submit(self.api.battlelog, tag)] = tag
 
-            results = list(executor.map(lambda t: (t, self.api.battlelog(t)), batch))
-            for tag, log in results:
-                if log is None:
-                    continue
-                parsed = parse_battlelog(log, tag)
-                fresh = 0
-                log_had_ranked = False
-                for g in parsed:
-                    self.examined += 1
-                    if g["dedupe"] in self.seen:
-                        continue
-                    self.seen.add(g["dedupe"])
-                    self.games.append(g)
-                    fresh += 1
-                    note_players(g)
-                    if g["is_ranked"]:
-                        log_had_ranked = True
-                    if g["rank_stage"] >= config.HIGH_STAGE_FLOOR:
-                        priority[:0] = [t for t in g["tags"] if t not in visited]
-                # snowball ranked co-players
-                if participant_tags(log):
-                    queue[:0] = [t for t in participant_tags(log) if t not in visited]
-                rec = self.producers.setdefault(tag, {})
-                rec["lastFetchedAt"] = self._now().isoformat()
-                rec["timesFetched"] = rec.get("timesFetched", 0) + 1
-                rec["freshGamesLastFetch"] = fresh
-
-                # recursive elite-club expansion
-                if log_had_ranked and club_expansions < club_budget:
-                    club_tag = rec.get("clubTag")
-                    if not rec.get("clubResolved"):
-                        prof = self.api.player(tag)
-                        club_tag = (prof or {}).get("club", {}).get("tag")
-                        rec["clubTag"] = club_tag
-                        rec["clubResolved"] = True
-                    if club_tag and club_tag not in expanded_clubs and self._club_due(club_tag):
-                        expanded_clubs.add(club_tag)
-                        detail = self.api.club(club_tag)
-                        if detail:
-                            self.elite["clubExpandedAt"][club_tag] = self._now().isoformat()
-                            if club_tag in self.elite["clubs"] or detail.get("trophies", 0) >= config.ELITE_CLUB_FLOOR:
-                                self.elite["clubs"].add(club_tag)
-                                club_expansions += 1
-                                members = [m["tag"] for m in detail.get("members", [])
-                                           if m["tag"] not in visited]
-                                priority[:0] = members
-                                self.elite["tags"].update(members)
+        refill()
+        while inflight and time.monotonic() < deadline:
+            done, _ = wait(list(inflight), timeout=2.0, return_when=FIRST_COMPLETED)
+            for fut in done:
+                tag = inflight.pop(fut)
+                try:
+                    log = fut.result()
+                except Exception:
+                    log = None
+                process(tag, log)
+            refill()
         executor.shutdown(wait=False)
 
     def _club_due(self, club_tag):

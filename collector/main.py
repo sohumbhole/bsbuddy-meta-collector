@@ -106,6 +106,8 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls,
     # switch to filling low-rank gaps).
     examined = getattr(crawler, "examined", 0)
     dup_rate = round(1 - (new_games / examined), 3) if examined else 0.0
+    elapsed = getattr(crawler, "elapsed", 0.0)
+    rps = round(api_calls / elapsed, 1) if elapsed > 0 else 0.0
     stats = _load(STATS_FILE, {"history": []})
     stats["updatedAt"] = now.isoformat().replace("+00:00", "Z")
     stats["current"] = {
@@ -119,6 +121,7 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls,
         "lastRunErrors": health["errors"] + health["serverErrors"],
         "lastRunForbidden": health["forbidden"],
         "lastRunDupRate": dup_rate,
+        "lastRunRps": rps,
         # Raw (uncompressed) snapshot size, same measure enforce_size_budget()
         # uses. The safety-net cap (SNAPSHOT_MAX_BYTES) is on THIS number, not
         # the gzipped upload size, since it's what the phone downloads-after-
@@ -174,6 +177,7 @@ def main():
     print(f"Crawling for up to {config.TIME_BUDGET_SECONDS}s "
           f"(concurrency={config.MAX_CONCURRENCY}, target_rps={config.TARGET_RPS})...")
     crawler.run(deadline)
+    crawler.elapsed = time.monotonic() - crawl_started
 
     # 3) aggregate new games into the snapshot
     model.aggregate_into(state["snapshot"], crawler.games)
