@@ -22,6 +22,7 @@ from .api import Api
 from .crawl import Crawler
 from . import model
 from . import stats as statsmod
+from . import tournaments as tourneys
 
 
 def _load(path, default):
@@ -66,6 +67,41 @@ def _save_gzip(path, data):
     with open(tmp, "wb") as f:
         f.write(gzip.compress(payload))
     os.replace(tmp, path)
+
+
+def maybe_fetch_tournaments(state, now):
+    """Fetch Liquipedia tournaments at most once/day (Q3). Runs inside the
+    normal pass but the daily gate means Liquipedia is hit ~once per 24h even
+    though main() runs every ~10 min. Writes tournaments.json.gz on success
+    (uploaded to the Release by the workflow). Returns True if a fresh file was
+    written this pass (so the workflow knows to upload it)."""
+    meta = state["meta"]
+
+    def _hrs_since(key):
+        iso = meta.get(key)
+        if not iso:
+            return 1e9
+        try:
+            return (now - datetime.fromisoformat(iso)).total_seconds() / 3600.0
+        except ValueError:
+            return 1e9
+
+    if _hrs_since("lastTournamentAttemptAt") < config.TOURNAMENT_RETRY_INTERVAL_HOURS:
+        return False  # attempted recently; don't hammer even on failure
+    if _hrs_since("lastTournamentFetchAt") < config.TOURNAMENT_FETCH_INTERVAL_HOURS:
+        return False  # fresh enough
+
+    meta["lastTournamentAttemptAt"] = now.isoformat()
+    data = tourneys.fetch()
+    if not data:
+        print("tournaments: fetch skipped/failed this cycle (kept previous cache)")
+        return False
+    _save_gzip(config.TOURNAMENTS_GZ_FILE, data)
+    meta["lastTournamentFetchAt"] = now.isoformat()
+    n_events = sum(len(v) for v in data.get("categories", {}).values())
+    n_pages = len(data.get("wikitext", {}))
+    print(f"tournaments: cached {n_events} events, {n_pages} wikitext pages")
+    return True
 
 
 def save_state(state):
@@ -199,6 +235,12 @@ def main():
     ranked = sum(1 for g in crawler.games if g["is_ranked"])
     high_rank = sum(1 for g in crawler.games if g["rank_stage"] >= config.HIGH_STAGE_FLOOR)
     write_stats(state, crawler, now, len(crawler.games), ranked, high_rank, api.calls, pruned_size)
+
+    # 4b) tournaments: fetch Liquipedia once/day (daily-gated), cache for the app
+    try:
+        maybe_fetch_tournaments(state, now)
+    except Exception as e:  # never let a tournament hiccup break a meta pass
+        print(f"tournaments: unexpected error, skipped ({e})")
 
     # 5) persist
     state["meta"]["lastRunAt"] = now.isoformat()

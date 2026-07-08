@@ -115,6 +115,13 @@ jobs:
                 echo "::warning::release asset upload failed this pass, will retry next pass"
             fi
 
+            # tournaments.json.gz (Q3): only rewritten ~once/day by the daily
+            # gate, but re-upload whenever it exists so the release stays current.
+            if [ -f data/tournaments.json.gz ]; then
+              gh release upload "$release_tag" data/tournaments.json.gz --clobber || \
+                echo "::warning::tournaments asset upload failed this pass, will retry next pass"
+            fi
+
             # Everything else (small, bounded): commit to git as before.
             git add data/elite_pool.json data/producers.json data/seen.json data/state.json data/stats.json
             if git diff --cached --quiet; then

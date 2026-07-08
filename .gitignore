@@ -8,3 +8,7 @@ __pycache__/
 # committed git blob). Local copies stay for debugging only.
 data/snapshot.json
 data/snapshot.json.gz
+
+# Tournaments cache: published as a Release asset (like snapshot), not committed
+data/tournaments.json
+data/tournaments.json.gz

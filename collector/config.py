@@ -81,6 +81,11 @@ PRODUCERS_FILE = f"{DATA_DIR}/producers.json"     # producer roster
 ELITE_FILE = f"{DATA_DIR}/elite_pool.json"        # elite pool + clubs + cursor
 SEEN_FILE = f"{DATA_DIR}/seen.json"               # bounded game dedupe keys
 STATE_FILE = f"{DATA_DIR}/state.json"             # lastRunAt etc.
+# Tournaments cache (Q3): Liquipedia wikitext fetched once/day, published as a
+# GitHub Release asset (gz); the app downloads + parses it with its own parser.
+TOURNAMENTS_GZ_FILE = f"{DATA_DIR}/tournaments.json.gz"
+TOURNAMENT_FETCH_INTERVAL_HOURS = 24   # hit Liquipedia at most once a day
+TOURNAMENT_RETRY_INTERVAL_HOURS = 2    # if a fetch fails, retry no sooner than this
 
 SEEN_CAP = 400_000                                # bound the dedupe set
 PRODUCER_CAP = 60_000                             # bound the roster
