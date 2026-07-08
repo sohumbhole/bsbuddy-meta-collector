@@ -89,6 +89,7 @@
 
 <script>
 const fmt = n => (n ?? 0).toLocaleString();
+const mb = n => ((n ?? 0) / 1_000_000).toFixed(1) + ' MB';
 function tile(k, v, cls, d){
   return `<div class="tile"><div class="k">${k}</div><div class="v ${cls||''}">${v}</div>${d?`<div class="d">${d}</div>`:''}</div>`;
 }
@@ -140,7 +141,10 @@ async function load(){
       tile('THIS WEEK', '+' + fmt(week.g), 'blue', '+' + fmt(week.hr) + ' legendary+') +
       tile('ELITE POOL', fmt(c.elitePool), '', fmt(c.eliteClubs) + ' elite clubs') +
       tile('MAPS TRACKED', fmt(c.maps), '', 'with live data') +
-      tile('LAST RUN', '+' + fmt(c.lastRunNewGames), '', fmt(c.lastRunApiCalls) + ' api calls');
+      tile('LAST RUN', '+' + fmt(c.lastRunNewGames), '', fmt(c.lastRunApiCalls) + ' api calls') +
+      tile('SNAPSHOT SIZE', mb(c.snapshotSizeBytes),
+           (c.snapshotSizeBytes / (c.snapshotSizeCapBytes || 1)) > 0.8 ? 'err' : '',
+           'of ' + mb(c.snapshotSizeCapBytes) + ' safety cap (2GB hard limit)');
 
     const q = c.quality || 0;
     document.getElementById('qtext').textContent = q + ' / 100';

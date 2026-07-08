@@ -95,7 +95,7 @@ STATS_FILE = f"{config.DATA_DIR}/stats.json"
 STATS_HISTORY_CAP = 3000
 
 
-def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls):
+def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls, snapshot_size_bytes):
     names = {str(b["id"]): b["name"] for b in
              ((crawler.api.brawlers() or {}).get("items", []))}
     totals, findings = statsmod.summarize(state["snapshot"], names)
@@ -108,6 +108,14 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls)
         "lastRunNewGames": new_games,
         "lastRunNewHighRank": new_high,
         "lastRunApiCalls": api_calls,
+        # Raw (uncompressed) snapshot size, same measure enforce_size_budget()
+        # uses. The safety-net cap (SNAPSHOT_MAX_BYTES) is on THIS number, not
+        # the gzipped upload size, since it's what the phone downloads-after-
+        # decompression and parses. Surfaced so Sohum can see it climbing
+        # toward the cap on the dashboard rather than finding out from a
+        # failed push.
+        "snapshotSizeBytes": snapshot_size_bytes,
+        "snapshotSizeCapBytes": config.SNAPSHOT_MAX_BYTES,
     }
     stats["findings"] = findings
     stats["history"].append({
@@ -160,10 +168,10 @@ def main():
     print(f"snapshot.json budget check: {pruned_size / 1_000_000:.1f}MB "
           f"(cap {config.SNAPSHOT_MAX_BYTES / 1_000_000:.0f}MB)")
 
-    # 4) dashboard stats (small stats.json the website reads, not the 38MB blob)
+    # 4) dashboard stats (small stats.json the website reads, not the big blob)
     ranked = sum(1 for g in crawler.games if g["is_ranked"])
     high_rank = sum(1 for g in crawler.games if g["rank_stage"] >= config.HIGH_STAGE_FLOOR)
-    write_stats(state, crawler, now, len(crawler.games), ranked, high_rank, api.calls)
+    write_stats(state, crawler, now, len(crawler.games), ranked, high_rank, api.calls, pruned_size)
 
     # 5) persist
     state["meta"]["lastRunAt"] = now.isoformat()
