@@ -29,9 +29,14 @@ UA = ("BSBuddyCollector/1.0 "
 # The `requests` library sends it and auto-decompresses; do NOT hand-roll this.
 
 MIN_INTERVAL = 2.1          # >= 1 req / 2s per the terms, with margin
-MAX_EVENTS = 24             # matches the app's list depth
-MAX_SUBPAGES_PER_EVENT = 8
+MAX_EVENTS = 40             # cache more events so more tournaments have data
+                            # (the app shows every cached event; brackets live
+                            # mostly in each event's MAIN wikitext, so more
+                            # events = more playable tournaments). ~40 events +
+                            # subpages once/day is still ~2 min, well compliant.
+MAX_SUBPAGES_PER_EVENT = 12
 WIKITEXT_BATCH = 40         # up to 50 titles per revisions query; stay under
+CMLIMIT = "40"             # category members to pull per tier before filtering
 
 
 class RateLimited(Exception):
@@ -68,7 +73,7 @@ class _Fetcher:
     def category_members(self, category: str) -> list:
         data = self._get({
             "action": "query", "list": "categorymembers",
-            "cmtitle": f"Category:{category}", "cmlimit": "20",
+            "cmtitle": f"Category:{category}", "cmlimit": CMLIMIT,
             "cmsort": "timestamp", "cmdir": "desc", "format": "json",
         })
         members = (((data or {}).get("query") or {}).get("categorymembers")) or []
