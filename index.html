@@ -142,6 +142,12 @@ async function load(){
       tile('ELITE POOL', fmt(c.elitePool), '', fmt(c.eliteClubs) + ' elite clubs') +
       tile('MAPS TRACKED', fmt(c.maps), '', 'with live data') +
       tile('LAST RUN', '+' + fmt(c.lastRunNewGames), '', fmt(c.lastRunApiCalls) + ' api calls') +
+      tile('API HEALTH',
+           (c.lastRunRateLimited || 0) + ' / ' + (c.lastRunErrors || 0),
+           ((c.lastRunRateLimited || 0) > (c.lastRunApiCalls || 1) * 0.1 || (c.lastRunForbidden || 0) > 0) ? 'err' : '',
+           '429s / errors last run' + ((c.lastRunForbidden || 0) > 0 ? ' · KEY 403!' : '')) +
+      tile('DUPLICATE RATE', Math.round((c.lastRunDupRate || 0) * 100) + '%', '',
+           'of parsed games already seen (high = re-treading)') +
       tile('SNAPSHOT SIZE', mb(c.snapshotSizeBytes),
            (c.snapshotSizeBytes / (c.snapshotSizeCapBytes || 1)) > 0.8 ? 'err' : '',
            'of ' + mb(c.snapshotSizeCapBytes) + ' safety cap (2GB hard limit)');

@@ -12,9 +12,13 @@ API_KEY = os.environ.get("BS_PROXY_KEY", "")
 
 # Politeness / rate limiting. The RoyaleAPI proxy enforces a per-second limit
 # and 429s (and can ban a key that hammers it), so we cap concurrency + rate
-# and back off hard on 429. These defaults are deliberately conservative.
-MAX_CONCURRENCY = int(os.environ.get("BS_CONCURRENCY", "8"))
-TARGET_RPS = float(os.environ.get("BS_RPS", "8"))
+# and back off hard on 429. Bumped up 2026-07-08 (was 8/8, giving only ~4 req/s
+# effective): the proxy tolerates far more, and the 429 handler auto-slows the
+# limiter if we overshoot, so this is safe to push. Watch the per-run
+# rateLimited/errors counters (logged + on the dashboard) after any change; if
+# 429s climb, dial these back down via the BS_CONCURRENCY / BS_RPS env vars.
+MAX_CONCURRENCY = int(os.environ.get("BS_CONCURRENCY", "24"))
+TARGET_RPS = float(os.environ.get("BS_RPS", "25"))
 REQUEST_TIMEOUT = 15
 
 # --- Run budget (one Actions job is bounded; runs accumulate via committed state) ---

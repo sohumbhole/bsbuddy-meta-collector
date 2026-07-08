@@ -19,6 +19,7 @@ class Crawler:
                                                  #  "clubs": set, "clubExpandedAt": {tag: iso}}
         self.seen = state["seen"]                # set of game dedupe keys
         self.games = []                          # collected this run
+        self.examined = 0                        # parsed games considered (fresh + dup)
         self._brawler_ids = None
 
     # --- helpers ---
@@ -151,6 +152,7 @@ class Crawler:
                 fresh = 0
                 log_had_ranked = False
                 for g in parsed:
+                    self.examined += 1
                     if g["dedupe"] in self.seen:
                         continue
                     self.seen.add(g["dedupe"])

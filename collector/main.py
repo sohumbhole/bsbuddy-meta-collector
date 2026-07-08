@@ -99,6 +99,13 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls,
     names = {str(b["id"]): b["name"] for b in
              ((crawler.api.brawlers() or {}).get("items", []))}
     totals, findings = statsmod.summarize(state["snapshot"], names)
+    health = crawler.api.health()
+    # Duplicate rate: of the battles we parsed this pass, how many were already
+    # seen. Climbs as high-rank crawling re-treads the same players; a key
+    # signal for whether we're wasting calls (and later the P1.4 trigger to
+    # switch to filling low-rank gaps).
+    examined = getattr(crawler, "examined", 0)
+    dup_rate = round(1 - (new_games / examined), 3) if examined else 0.0
     stats = _load(STATS_FILE, {"history": []})
     stats["updatedAt"] = now.isoformat().replace("+00:00", "Z")
     stats["current"] = {
@@ -108,6 +115,10 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls,
         "lastRunNewGames": new_games,
         "lastRunNewHighRank": new_high,
         "lastRunApiCalls": api_calls,
+        "lastRunRateLimited": health["rateLimited"],
+        "lastRunErrors": health["errors"] + health["serverErrors"],
+        "lastRunForbidden": health["forbidden"],
+        "lastRunDupRate": dup_rate,
         # Raw (uncompressed) snapshot size, same measure enforce_size_budget()
         # uses. The safety-net cap (SNAPSHOT_MAX_BYTES) is on THIS number, not
         # the gzipped upload size, since it's what the phone downloads-after-
@@ -128,6 +139,10 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls,
         "newRanked": new_ranked,
         "newHighRank": new_high,
         "apiCalls": api_calls,
+        "rateLimited": health["rateLimited"],
+        "errors": health["errors"] + health["serverErrors"],
+        "forbidden": health["forbidden"],
+        "dupRate": dup_rate,
         "elitePool": len(state["elite"]["tags"]),
         "eliteClubs": len(state["elite"]["clubs"]),
     })
@@ -154,8 +169,10 @@ def main():
     if len(state["elite"]["tags"]) < 3000:
         print("Harvesting elite pool (cold start)...")
         crawler.harvest_elite()
-    deadline = time.monotonic() + config.TIME_BUDGET_SECONDS
-    print(f"Crawling for up to {config.TIME_BUDGET_SECONDS}s...")
+    crawl_started = time.monotonic()
+    deadline = crawl_started + config.TIME_BUDGET_SECONDS
+    print(f"Crawling for up to {config.TIME_BUDGET_SECONDS}s "
+          f"(concurrency={config.MAX_CONCURRENCY}, target_rps={config.TARGET_RPS})...")
     crawler.run(deadline)
 
     # 3) aggregate new games into the snapshot
@@ -180,10 +197,23 @@ def main():
 
     high_rank = sum(1 for g in crawler.games if g["rank_stage"] >= config.HIGH_STAGE_FLOOR)
     ranked = sum(1 for g in crawler.games if g["is_ranked"])
-    print(f"Done. api_calls={api.calls} new_games={len(crawler.games)} "
+    h = api.health()
+    examined = getattr(crawler, "examined", 0)
+    dup_rate = round(1 - (len(crawler.games) / examined), 3) if examined else 0.0
+    elapsed = time.monotonic() - crawl_started
+    rps = round(api.calls / elapsed, 1) if elapsed > 0 else 0
+    # One dense, greppable health line per pass (shows up in the Actions log).
+    print(f"Done. api_calls={api.calls} rps~{rps} new_games={len(crawler.games)} "
+          f"examined={examined} dup_rate={dup_rate} "
           f"ranked={ranked} high_rank(legend+)={high_rank} "
+          f"rate_limited={h['rateLimited']} errors={h['errors']} "
+          f"server_errors={h['serverErrors']} forbidden={h['forbidden']} "
           f"elite_pool={len(state['elite']['tags'])} elite_clubs={len(state['elite']['clubs'])} "
           f"snapshot_games={state['snapshot'].get('gamesAnalyzed')}")
+    if h["forbidden"] > 0:
+        print(f"::warning::{h['forbidden']} forbidden (403) responses - check BS_PROXY_KEY validity/whitelist")
+    if h["rateLimited"] > api.calls * 0.1 and api.calls > 0:
+        print(f"::warning::high 429 rate ({h['rateLimited']}/{api.calls}); the limiter auto-slowed. Consider lowering BS_RPS/BS_CONCURRENCY")
     return 0
 
 

@@ -35,7 +35,22 @@ class Api:
         self.session.headers.update({"Authorization": f"Bearer {config.API_KEY}"})
         self.limiter = RateLimiter(config.TARGET_RPS)
         self.calls = 0
+        # Health counters (surfaced per-run so we can SEE whether pushing the
+        # rate harder actually works or just trips 429s / bans).
+        self.rate_limited = 0     # 429s (proxy throttling us)
+        self.errors = 0           # network exceptions that exhausted retries
+        self.forbidden = 0        # 403s (bad / unwhitelisted key) - key problem
+        self.server_errors = 0    # 5xx from upstream
         self._lock = threading.Lock()
+
+    def health(self) -> dict:
+        return {
+            "calls": self.calls,
+            "rateLimited": self.rate_limited,
+            "errors": self.errors,
+            "forbidden": self.forbidden,
+            "serverErrors": self.server_errors,
+        }
 
     def _get(self, path: str):
         """GET with rate limiting + 429/5xx backoff. Returns parsed JSON or None."""
@@ -47,6 +62,9 @@ class Api:
             try:
                 r = self.session.get(url, timeout=config.REQUEST_TIMEOUT)
             except requests.RequestException:
+                if attempt == 3:
+                    with self._lock:
+                        self.errors += 1
                 time.sleep(0.5 * (attempt + 1))
                 continue
             if r.status_code == 200:
@@ -55,13 +73,21 @@ class Api:
                 except ValueError:
                     return None
             if r.status_code == 429:
+                with self._lock:
+                    self.rate_limited += 1
                 self.limiter.slow_down()
                 time.sleep(1.5 * (attempt + 1))
                 continue
             if r.status_code in (500, 502, 503, 504):
+                with self._lock:
+                    self.server_errors += 1
                 time.sleep(0.5 * (attempt + 1))
                 continue
-            # 403 (bad/unwhitelisted key) or 404 (missing tag/club) -> give up quietly
+            if r.status_code == 403:
+                with self._lock:
+                    self.forbidden += 1
+                return None
+            # 404 (missing tag/club) -> give up quietly
             return None
         return None
 
