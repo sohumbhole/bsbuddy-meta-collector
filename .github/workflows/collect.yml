@@ -115,6 +115,14 @@ jobs:
                 echo "::warning::release asset upload failed this pass, will retry next pass"
             fi
 
+            # snapshot-lite.json.gz: brawlers-only slice (no versus/synergy) for
+            # the app's tier-list / meta-hub path. ~1% of the full file, so the
+            # phone parses tier lists cheaply instead of the whole blob.
+            if [ -f data/snapshot-lite.json.gz ]; then
+              gh release upload "$release_tag" data/snapshot-lite.json.gz --clobber || \
+                echo "::warning::lite asset upload failed this pass, will retry next pass"
+            fi
+
             # tournaments.json.gz (Q3): only rewritten ~once/day by the daily
             # gate, but re-upload whenever it exists so the release stays current.
             if [ -f data/tournaments.json.gz ]; then

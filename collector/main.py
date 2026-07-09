@@ -107,6 +107,9 @@ def maybe_fetch_tournaments(state, now):
 def save_state(state):
     _save(config.SNAPSHOT_FILE, state["snapshot"])
     _save_gzip(config.SNAPSHOT_GZ_FILE, state["snapshot"])
+    # Tiny brawlers-only slice for the app's tier-list / meta-hub path (the
+    # pair data is ~99% of the full file and only the draft screens need it).
+    _save_gzip(config.SNAPSHOT_LITE_GZ_FILE, model.build_lite_snapshot(state["snapshot"]))
     # bound the growing sets/maps before persisting
     seen = list(state["seen"])[-config.SEEN_CAP:]
     _save(config.SEEN_FILE, seen)

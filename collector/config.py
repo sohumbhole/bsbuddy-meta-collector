@@ -86,6 +86,15 @@ PATCH_AFFECTED_BRAWLERS: dict[str, list[int]] = {}
 DATA_DIR = os.environ.get("BS_DATA_DIR", "data")
 SNAPSHOT_FILE = f"{DATA_DIR}/snapshot.json"       # full interchange (local/debug only, not committed)
 SNAPSHOT_GZ_FILE = f"{DATA_DIR}/snapshot.json.gz"  # published as a GitHub Release asset (app downloads this)
+# "Lite" snapshot = maps with ONLY per-brawler tallies (versus/synergy pair data
+# dropped). The tier list / meta hub needs ONLY the brawler tallies (~1% of the
+# file); versus+synergy are ~99% and are used solely by the draft/matchup
+# surfaces. Publishing this tiny slice lets the app load tier lists from a ~few-MB
+# file instead of parsing the whole 100MB+ blob in memory (the real near-term
+# ceiling per Fable's storage research), while the full snapshot stays available
+# for the draft screens to lazy-load. Same tally format, so the app parses it
+# with the exact same code path (its parser already tolerates absent pairs).
+SNAPSHOT_LITE_GZ_FILE = f"{DATA_DIR}/snapshot-lite.json.gz"
 PRODUCERS_FILE = f"{DATA_DIR}/producers.json"     # producer roster
 ELITE_FILE = f"{DATA_DIR}/elite_pool.json"        # elite pool + clubs + cursor
 SEEN_FILE = f"{DATA_DIR}/seen.json"               # bounded game dedupe keys

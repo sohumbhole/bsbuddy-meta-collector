@@ -270,6 +270,30 @@ def enforce_size_budget(snapshot: dict, max_bytes: int = config.SNAPSHOT_MAX_BYT
     return size
 
 
+def build_lite_snapshot(snapshot: dict) -> dict:
+    """A copy of the snapshot with the versus/synergy pair collections dropped
+    from every map, keeping only per-brawler tallies + map metadata.
+
+    This is the tier-list / meta-hub feed: TierListBuilder reads only
+    `stats.brawlers`, never the pairs, yet the pairs are ~99% of the file.
+    Shipping this ~1%-size slice as its own Release asset lets the app parse
+    tier lists cheaply on the phone (parse memory is the binding constraint,
+    not the 2GB asset cap). The full snapshot still publishes for the draft/
+    matchup screens. Top-level metadata is copied through so the app's existing
+    adapter parses it unchanged (its parser already treats absent versus/
+    synergy as empty)."""
+    lite = {k: v for k, v in snapshot.items() if k != "maps"}
+    lite_maps = {}
+    for name, m in snapshot.get("maps", {}).items():
+        lite_maps[name] = {
+            "mode": m.get("mode"),
+            "games": m.get("games", 0.0),
+            "brawlers": m.get("brawlers", {}),
+        }
+    lite["maps"] = lite_maps
+    return lite
+
+
 def finalize(snapshot: dict, now: datetime):
     """Stamp metadata + recompute the active game count for the interchange file."""
     snapshot["generatedAt"] = now.isoformat().replace("+00:00", "Z")
