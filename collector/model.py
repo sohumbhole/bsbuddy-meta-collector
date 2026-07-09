@@ -235,15 +235,17 @@ def compact_snapshot(snapshot: dict, ndigits: int = 2):
 
 
 def enforce_size_budget(snapshot: dict, max_bytes: int = config.SNAPSHOT_MAX_BYTES) -> int:
-    """Keep the interchange file safely under GitHub's 100MB hard push limit.
+    """RUNAWAY-BUG BACKSTOP ONLY. Not a routine prune.
 
-    versus/synergy pair tallies have no natural cap: distinct brawler-pair
-    keys keep appearing as more games are seen, so left alone the file grows
-    past the limit and every subsequent push fails forever (this happened
-    2026-07-07: the file sat at ~116MB and no commit could land for hours).
-    Ratchet a picks-floor up and drop the weakest (lowest-signal) pairs first,
-    re-measuring real serialized size after each pass, until under budget.
-    Returns the final size in bytes.
+    Sohum's directive (2026-07-08): never shed valuable current data to hit a
+    size target; the ONLY thing that removes data is the half-life decay above.
+    So SNAPSHOT_MAX_BYTES is set far above any healthy plateau and this function
+    is a no-op under normal operation, returning the size unchanged. It only
+    fires if a bug spins forever appending garbage keys (the kind of failure
+    that on 2026-07-07 pushed the file past the old git-blob limit). In that
+    pathological case it ratchets a picks-floor up, dropping the weakest
+    (lowest-signal) pairs first and re-measuring, purely to keep the Release
+    asset uploadable. Returns the final size in bytes.
     """
     size = _snapshot_size(snapshot)
     if size <= max_bytes:

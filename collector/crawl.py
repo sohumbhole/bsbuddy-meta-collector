@@ -26,6 +26,14 @@ class Crawler:
         # main() from the snapshot each run. High rank is ALWAYS priority; this
         # is additive so under-served ranks (e.g. diamond) build a baseline too.
         self.wanted_buckets = set()
+        # Population discovery via neighbor tag-guessing (Sohum's idea): tags
+        # encode a sequential creation ID uncorrelated with skill, so perturbing
+        # a known valid tag's trailing chars samples same-era accounts = roughly
+        # uniform skill = mostly the LOW-trophy/LOW-rank players snowball + top
+        # leaderboards can't reach. This set is the candidates injected this run,
+        # for measuring the hit rate afterward.
+        self.candidate_tags = set()
+        self.candidate_hits = 0        # candidate tags that returned fresh games
         self._brawler_ids = None
 
     # --- helpers ---
@@ -122,6 +130,38 @@ class Crawler:
         random.shuffle(out)
         return out[:limit]
 
+    # Brawl Stars tag alphabet (14 chars). Tags encode a sequential account
+    # creation id, so this is the full symbol set trailing digits are drawn from.
+    _TAG_ALPHABET = "0289PYLQGRJCUV"
+
+    def _candidate_tags(self, n):
+        # Sohum's population-discovery idea: perturb the trailing 1-2 chars of a
+        # KNOWN valid tag to sample the same account-id neighborhood (same-era
+        # accounts). Creation order is uncorrelated with skill, so the valid hits
+        # are a roughly uniform skill sample = mostly the LOW-trophy / LOW-rank
+        # players the snowball + top leaderboards can't reach. Invalid guesses
+        # just 404 (cheap: we're supply-limited, not rate-limited, so idle
+        # capacity pays for the misses). Valid ones enter the normal battlelog
+        # path and their games/co-players get harvested like any producer.
+        pool = list(self.producers.keys()) + list(self.elite["tags"])
+        if not pool:
+            return []
+        out = set()
+        tries = 0
+        while len(out) < n and tries < n * 5:
+            tries += 1
+            core = random.choice(pool).lstrip("#")
+            if len(core) < 5:
+                continue
+            k = random.choice([1, 1, 2])   # bias to 1 char = stay closer/denser
+            cand = "#" + core[:-k] + "".join(random.choice(self._TAG_ALPHABET)
+                                             for _ in range(k))
+            if cand[1:] == core or cand in self.producers:
+                continue
+            out.add(cand)
+        self.candidate_tags |= out
+        return list(out)
+
     def build_seed_queue(self):
         seeds = []
         # Thin-rank players first, so under-served ranks build a baseline even
@@ -134,6 +174,13 @@ class Crawler:
         seeds += self._due_producers(400)
         top = self.api.top_players() or {}
         seeds += [it["tag"] for it in top.get("items", [])[:150]]
+        # Population-discovery guesses LAST: they only get fetched once the known
+        # queue drains (we're supply-limited, so that idle tail is exactly what
+        # pays for the 404s). More when a bucket is thin, since guesses skew
+        # low-rank = the underserved brackets. Discovered valid players persist
+        # in `producers` and get re-checked on the normal cooldown thereafter, so
+        # this snowballs a standing low-bracket roster over successive runs.
+        seeds += self._candidate_tags(1200 if self.wanted_buckets else 500)
         # de-dup preserving order
         out, seen = [], set()
         for t in seeds:
@@ -202,6 +249,8 @@ class Crawler:
             rec["freshGamesLastFetch"] = fresh
             if fresh > 0:
                 rec["lastFreshAt"] = self._now().isoformat()  # dormancy signal
+                if tag in self.candidate_tags:
+                    self.candidate_hits += 1   # guessed tag that turned up real games
 
             # recursive elite-club expansion
             if log_had_ranked and club_expansions < club_budget:

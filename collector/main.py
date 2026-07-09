@@ -172,6 +172,12 @@ def write_stats(state, crawler, now, new_games, new_ranked, new_high, api_calls,
         # failed push.
         "snapshotSizeBytes": snapshot_size_bytes,
         "snapshotSizeCapBytes": config.SNAPSHOT_MAX_BYTES,
+        # Population-discovery (tag-guessing) yield: guesses injected this pass
+        # and how many turned up real games. The hit RATE tells us if guessing is
+        # worth the idle-capacity calls; the raw HITS are net-new low-bracket
+        # players added to the standing roster this run.
+        "lastRunCandidates": len(crawler.candidate_tags),
+        "lastRunCandidateHits": crawler.candidate_hits,
     }
     stats["findings"] = findings
     stats["history"].append({
@@ -300,6 +306,7 @@ def main():
           f"x_ratelimit_limit={h['limitHeader']} remaining_min={h['remainingMin']} "
           f"avg_latency_ms={h['avgLatencyMs']} concurrency={config.MAX_CONCURRENCY} "
           f"elite_pool={len(state['elite']['tags'])} elite_clubs={len(state['elite']['clubs'])} "
+          f"candidates={len(crawler.candidate_tags)} candidate_hits={crawler.candidate_hits} "
           f"snapshot_games={state['snapshot'].get('gamesAnalyzed')}")
     if h["forbidden"] > 0:
         print(f"::warning::{h['forbidden']} forbidden (403) responses - check BS_PROXY_KEY validity/whitelist")

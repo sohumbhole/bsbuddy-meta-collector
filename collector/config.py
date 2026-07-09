@@ -103,13 +103,24 @@ SEEN_CAP = 400_000                                # bound the dedupe set
 PRODUCER_CAP = 150_000                             # bound the roster
 ELITE_CAP = 120_000                                # bound the elite pool
 
-# snapshot.json is now published as a GitHub Release asset (2GB cap), not a
+# snapshot.json is published as a GitHub Release asset (2GB cap), not a
 # git-committed blob (git/GitHub hard-rejects any committed file over ~100MiB,
-# which is what caused the 2026-07-07 outage: growth is uncapped by design so
-# Sohum can collect as many games as the API allows, no artificial ceiling).
-# This is a SAFETY NET only (a bug that spins forever appending garbage keys),
-# not a routine data-destroying prune: real versus/synergy keys are bounded by
-# brawler-pair combinatorics per map (~a few hundred MB at total saturation),
-# comfortably under this. enforce_size_budget() is a no-op unless something is
-# actually wrong.
-SNAPSHOT_MAX_BYTES = 900_000_000
+# which is what caused the 2026-07-07 outage).
+#
+# Sohum's directive (2026-07-08): DO NOT prune valuable current data to hit a
+# size target. We never want to lose a real data point until it ages out; the
+# ONLY thing that should remove data is the half-life decay (model.py), which
+# deletes a tally once its weight falls below ~0.05 (roughly 5 weeks of no new
+# games for that pair). That age-based decay is what actually bounds the file:
+# real versus/synergy keys are capped by brawler-pair combinatorics per map, so
+# with constant inflow the size PLATEAUS where decay-out balances new-in, not
+# grows without limit. The 38% compaction (model.compact_snapshot) plus decay
+# keep the plateau modest.
+#
+# enforce_size_budget() is therefore demoted to a pure RUNAWAY-BUG BACKSTOP: it
+# must not fire on healthy growth, only if a bug spins forever appending garbage
+# keys. Set the net far above any plausible healthy plateau so normal data is
+# never touched. (This raw number also feeds the phone's parse-memory limit and
+# the 2GB gz Release cap; both are tracked as the storage-scale backlog item in
+# STATE.md / FABLE_RESEARCH.md, which is the real long-term fix, not pruning.)
+SNAPSHOT_MAX_BYTES = int(os.environ.get("BS_SNAPSHOT_MAX_BYTES", "1400000000"))  # 1.4GB backstop
