@@ -143,9 +143,15 @@ def aggregate_into(snapshot: dict, games: list[dict]):
 # --- Decay ------------------------------------------------------------------
 
 def _scale_tally(t, factor):
-    for k in ("picks", "wins", "rPicks", "rWins", "tPicks", "tWins"):
-        t[k] *= factor
-    for bucket, pair in list(t["rankBuckets"].items()):
+    # Use .get-style guards: compact_snapshot() drops zero tPicks/tWins to shrink
+    # the file, so those keys are frequently ABSENT here. Reading them directly
+    # (t["tPicks"]) raised KeyError and crashed every decay pass on a compacted
+    # snapshot (2026-07-09 collector freeze). A missing key means 0 -> nothing to
+    # scale, so just skip it.
+    for k in _TALLY_KEYS:
+        if k in t:
+            t[k] *= factor
+    for bucket, pair in list(t.get("rankBuckets", {}).items()):
         pair[0] *= factor
         pair[1] *= factor
         if pair[0] < 0.05:
